@@ -1,2 +1,4 @@
 cls
 dataset_json/imagnet_dataset.json
+.idea
+.vscode

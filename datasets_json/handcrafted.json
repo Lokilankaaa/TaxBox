@@ -1,0 +1,160 @@
+{
+  "object": {
+    "description": "a tangible and visible entity; an entity that can cast a shadow",
+    "children": [
+      {
+        "food": {
+          "description": "any substance that can be metabolized by an animal to give energy and build tissue",
+          "children": [
+            {
+              "fruit": {
+                "description": "",
+                "children": [
+                  {
+                    "apple": {
+                      "description": "fruit with red or yellow or green skin and sweet to tart crisp whitish flesh"
+                    }
+                  },
+                  {
+                    "banana": {
+                      "description": "elongated crescent-shaped yellow fruit with soft sweet flesh"
+                    }
+                  },
+                  {
+                    "watermelon": {
+                      "description": "large oblong or roundish melon with a hard green rind and sweet watery red or occasionally yellowish pulp"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "drink": {
+                "description": "",
+                "children": [
+                  {
+                    "coffee": {
+                      "description": "a beverage consisting of an infusion of ground coffee beans"
+                    }
+                  },
+                  {
+                    "milk": {
+                      "description": "a white nutritious liquid secreted by mammals and used as food by human beings"
+                    }
+                  },
+                  {
+                    "wine": {
+                      "description": "fermented juice (of grapes especially)"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "living_thing": {
+          "description": "a living (or once living) entity",
+          "children": [
+            {
+              "animal": {
+                "description": "",
+                "children": [
+                  {
+                    "dog": {
+                      "description": "a member of the genus Canis (probably descended from the common wolf) that has been domesticated by man since prehistoric times; occurs in many breeds"
+                    }
+                  },
+                  {
+                    "cat": {
+                      "description": "feline mammal usually having thick soft fur and no ability to roar: domestic cats; wildcats"
+                    }
+                  },
+                  {
+                    "fish": {
+                      "description": "any of various mostly cold-blooded aquatic vertebrates usually having scales and breathing through gills"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "plant": {
+                "description": "",
+                "children": [
+                  {
+                    "flower": {
+                      "description": "reproductive organ of angiosperm plants especially one having showy or colorful parts"
+                    }
+                  },
+                  {
+                    "grasses": {
+                      "description": "narrow-leaved green herbage: grown as lawns; used as pasture for grazing animals; cut and dried as hay"
+                    }
+                  },
+                  {
+                    "tree": {
+                      "description": "a tall perennial woody plant having a main trunk and branches forming a distinct elevated crown; includes both gymnosperms and angiosperms"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "artifact": {
+          "description": "a man-made object taken as a whole",
+          "children": [
+            {
+              "electronic_device": {
+                "description": "",
+                "children": [
+                  {
+                    "keyboard": {
+                      "description": "device consisting of a set of keys on a piano or organ or typewriter or typesetting machine or computer or the like"
+                    }
+                  },
+                  {
+                    "mouse": {
+                      "description": "a hand-operated electronic device that controls the coordinates of a cursor on your computer screen as you move it around on a pad; on the bottom of the device is a ball that rolls on the surface of the pad"
+                    }
+                  },
+                  {
+                    "monitor": {
+                      "description": "an electronic device that represents information in visual form"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "clothing": {
+                "description": "",
+                "children": [
+                  {
+                    "hat": {
+                      "description": "headdress that protects the head from bad weather; has shaped crown and usually a brim"
+                    }
+                  },
+                  {
+                    "shoe": {
+                      "description": "footwear shaped to fit the foot (below the ankle) with a flexible upper of leather or plastic and a sole and heel of heavier material"
+                    }
+                  },
+                  {
+                    "shirt": {
+                      "description": "a garment worn on the upper half of the body"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

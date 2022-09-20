@@ -44,7 +44,7 @@ class Handcrafted(InMemoryDataset):
         self.raw_classes_graph = json.load(open(self.raw_paths[0]))
         self.traverse_tree(self.raw_classes_graph)
 
-        data_list = [Data(x=torch.Tensor(self.nodes), edge_index=torch.Tensor(np.array(self.edges)),
+        data_list = [Data(x=torch.Tensor(self.nodes), edge_index=torch.Tensor(np.array(self.edges)).type(torch.long),
                           raw_graph=self.raw_classes_graph)]
 
         if self.pre_filter is not None:
@@ -67,7 +67,7 @@ class Handcrafted(InMemoryDataset):
                 img_features_offsets[:, :] = 1e-6
                 img_features = np.hstack((img_features, img_features_offsets))
                 # may be change to use the variance of image features
-                e_des_offset = np.random.multivariate_normal(np.zeros_like(e_des), img_features_cov)
+                e_des_offset = np.random.multivariate_normal(np.zeros_like(e_des), img_features_cov).__abs__()
                 e_des = np.hstack([e_des, e_des_offset])
                 start = len(self.nodes)
                 num = img_features.shape[0]
@@ -75,19 +75,19 @@ class Handcrafted(InMemoryDataset):
                 self.nodes = np.vstack([self.nodes, e_des])
                 new_edges = np.array([list(range(start, start + num)), [start + num] * num])
                 self.edges = new_edges if len(self.edges) == 0 else np.hstack([self.edges, new_edges])
+                v['id'] = start + num
                 return start + num
             else:
                 child_node_index = []
                 for child in v['children']:
-                    child['id'] = self.traverse_tree(child)
-                    child_node_index.append(child['id'])
-                    child['father'] = head
+                    child_node_index.append(self.traverse_tree(child))
                 e_des = encode_description(v['description'])[0].cpu().numpy()
-                e_des_offset = np.random.normal(size=e_des.shape)
+                e_des_offset = np.random.normal(size=e_des.shape).__abs__()
                 e_des = np.hstack([e_des, e_des_offset])
                 self.nodes = np.vstack([self.nodes, e_des])
-                ind = len(self.nodes)
+                ind = len(self.nodes) - 1
                 self.edges = np.hstack([self.edges, np.array([child_node_index, [ind] * len(child_node_index)])])
+                v['id'] = ind
                 return ind
 
 

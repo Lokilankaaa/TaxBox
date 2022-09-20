@@ -8,8 +8,33 @@ import os
 import numpy as np
 import clip
 import random
+import torch.nn.functional as F
 from box_embeddings.modules.intersection import HardIntersection, GumbelIntersection
 from box_embeddings.modules.volume import HardVolume, SoftVolume, BesselApproxVolume
+
+EPS = 1e-4
+
+
+def checkpoint(path_to_save, model):
+    torch.save(path_to_save, model.state_dict())
+
+
+def sample_pair(path, relation='son'):
+    assert relation in ('son', 'descendant')
+    if type(path) != tuple:
+        pathx = path
+        path_len = len(pathx)
+        anchor = random.randint(0, path_len - 2)
+        if relation == 'son':
+            return pathx[anchor], pathx[anchor + 1]
+        else:
+            return pathx[anchor], pathx[random.randint(anchor + 1, path_len - 1)]
+    else:
+        pathx, pathy = path
+        start = check_common_path(pathx, pathy)
+        anchorx = random.randint(start, len(pathx) - 1)
+        anchory = random.randint(start, len(pathy) - 1)
+        return pathx[anchorx], pathy[anchory]
 
 
 def check_common_path(seq_x, seq_y):
@@ -19,50 +44,70 @@ def check_common_path(seq_x, seq_y):
     return i
 
 
+def check_same_path(seq_x, seq_y):
+    if type(seq_x) == list:
+        seq_x = np.array(seq_x, dtype=np.int32)
+    if type(seq_y) == list:
+        seq_y = np.array(seq_y, dtype=np.int32)
+
+    return ((seq_x - seq_y).sum(-1) == 0).sum() != 0
+
+
 def sample_path(raw_graph, num=1):
     paths = []
-    for i in range(num):
+    while len(paths) < num:
         path = []
         head = raw_graph['object']
         path.append(head['id'])
         while 'children' in head.keys():
             selected = random.choice(head['children'])
-            head = selected[selected.keys()[0]]
+            head = selected[list(selected.keys())[0]]
             path.append(head['id'])
+        if len(paths) != 0 and check_same_path(paths, path):
+            continue
         paths.append(path)
     return paths
 
 
 def hard_volume(x: torch.Tensor):
-    assert x.dim() == 1
-    features_len = len(x)
-    box_offset = x[features_len:]
-    return 2. * box_offset.prod()
+    assert x.dim() == 2
+    features_len = x.shape[-1] // 2
+    box_offset = x[:, features_len:]
+    return 2. * box_offset.prod(-1)
 
 
 def softplus(x, t):
-    return torch.log(torch.Tensor(1) + torch.exp(x * 2 / t))
+    #EPS in case of nan
+    return F.softplus(x, t)
 
 
-def soft_volume(x: torch.Tensor, t):
-    assert x.dim() == 1
-    features_len = len(x)
-    box_offset = x[features_len:]
-    return softplus(box_offset, t).prod()
+def soft_volume(x: torch.Tensor, t=1):
+    assert x.dim() == 2
+    features_len = x.shape[-1] // 2
+    box_length = x[:, features_len:] * 2
+    return (t * softplus(box_length, t)).clamp(min=EPS)
 
 
 def hard_intersection(x, y):
-    assert x.dim() == 1, y.dim() == 1
-    features_len = len(x)
-    l = torch.max(x[:features_len] - x[features_len:], y[:features_len] - y[features_len:])
-    r = torch.min(x[:features_len] + x[features_len:], y[:features_len] + y[features_len:])
+    assert x.dim() == 2, y.dim() == 2
+    x_center, x_offset = x.chunk(2, -1)
+    y_center, y_offset = y.chunk(2, -1)
+    r = torch.min(x_center + x_offset, y_center + y_offset)
+    l = torch.max(x_center - x_offset, y_center - y_offset)
     cen, off = (l + r) / 2, (r - l) / 2
-    return torch.stack([cen, off])
+    return torch.cat([cen, off], dim=-1)
+
+
+# log p(x|y)
+def log_conditional_prob(x, y):
+    inter = hard_intersection(x, y)
+    log_prob = torch.log(soft_volume(inter) / soft_volume(y)).sum(-1).clamp(max=-EPS)
+    return log_prob
 
 
 # p(x | y)
 def conditional_prob(x, y):
-    return hard_volume(hard_intersection(x, y)) / hard_volume(y)
+    return (soft_volume(hard_intersection(x, y)) / soft_volume(y)).prod(-1)
 
 
 def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[str]], label, device):
@@ -156,7 +201,7 @@ def retrieve_model(model_name, device):
 
 
 if __name__ == '__main__':
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model, preprocess = retrieve_model('resnet50', device)
-    extract_features_for_imgs(model, preprocess, 'handcrafted')
+    # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # model, preprocess = retrieve_model('resnet50', device)
+    # extract_features_for_imgs(model, preprocess, 'handcrafted')
     visualize_distribution('features/apple.npy')

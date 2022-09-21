@@ -24,21 +24,30 @@ def _insert_node(raw_graph, graph_embeddings, model, novel_node_des: (str, str),
     novel_data = Data(x=torch.Tensor(nodes), edge_index=torch.Tensor(edges).type(torch.long)).to(device)
     outs = model(novel_data)
     novel_node = outs[-1]
-    head = raw_graph['object']
+    cur_name = 'object'
+    head = raw_graph[cur_name]
+    choose_child = None
     while 'children' in head.keys():
-        max_prob = 0
+        max_log_prob = -99999
         choose_child = None
         for child in head['children']:
-            cur_node = graph_embeddings[child[[list(child.keys())[0]]]['id']]
-            prob_cur_in_novel = conditional_prob(novel_node, cur_node)
-            prob_novel_in_cur = conditional_prob(cur_node, novel_node)
-            if prob_novel_in_cur > prob_cur_in_novel and prob_novel_in_cur > max_prob:
+            cur_node = graph_embeddings[child[list(child.keys())[0]]['id']]
+            prob_cur_in_novel = log_conditional_prob(novel_node.unsqueeze(0), cur_node.unsqueeze(0))
+            prob_novel_in_cur = log_conditional_prob(cur_node.unsqueeze(0), novel_node.unsqueeze(0))
+            if prob_novel_in_cur > prob_cur_in_novel and prob_novel_in_cur > max_log_prob:
                 choose_child = child
+                max_log_prob = prob_novel_in_cur
             else:
                 pass
-
-        head = choose_child
-    print(head)
+        if choose_child is None:
+            break
+        else:
+            cur_name = list(choose_child.keys())[0]
+            head = choose_child[cur_name]
+    if choose_child is None:
+        print('{} is son of {}'.format(novel_node_des[0], cur_name))
+    else:
+        print('{} is sibling of {}'.format(novel_node_des[0], cur_name))
 
 
 def test_on_insert(path_to_json, raw_graph, graph_embeddings, model):
@@ -47,3 +56,12 @@ def test_on_insert(path_to_json, raw_graph, graph_embeddings, model):
         des = v['description']
         img_lists = '/data/home10b/xw/visualCon/test_handcrafted/'
         _insert_node(raw_graph, graph_embeddings, model, (k, des), img_lists)
+
+
+def test_entailment(raw_graph, graph_embeddings):
+    head_name = 'object'
+    head = raw_graph[head_name]
+    while 'children' in head.keys():
+        for child in head['children']:
+            cur_name = list(child.keys())[0]
+            prob = conditional_prob(graph_embeddings[head['id']], graph_embeddings[cur_name['id']])

@@ -8,7 +8,7 @@
           "children": [
             {
               "fruit": {
-                "description": "",
+                "description": "the ripened reproductive body of a seed plant)",
                 "children": [
                   {
                     "apple": {
@@ -30,7 +30,7 @@
             },
             {
               "drink": {
-                "description": "",
+                "description": "any liquid suitable for drinking",
                 "children": [
                   {
                     "coffee": {
@@ -59,7 +59,7 @@
           "children": [
             {
               "animal": {
-                "description": "",
+                "description": "(a living organism characterized by voluntary movement",
                 "children": [
                   {
                     "dog": {
@@ -81,7 +81,7 @@
             },
             {
               "plant": {
-                "description": "",
+                "description": "a living organism lacking the power of locomotion",
                 "children": [
                   {
                     "flower": {
@@ -110,7 +110,7 @@
           "children": [
             {
               "electronic_device": {
-                "description": "",
+                "description": "a device that accomplishes its purpose electronically",
                 "children": [
                   {
                     "keyboard": {
@@ -132,7 +132,7 @@
             },
             {
               "clothing": {
-                "description": "",
+                "description": "a covering designed to be worn on a person's body",
                 "children": [
                   {
                     "hat": {

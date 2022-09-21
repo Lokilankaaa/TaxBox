@@ -125,7 +125,7 @@ def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[s
             inputs.append(preprocess(i).to(device))
         except:
             continue
-    print(label, len(inputs))
+    # print(label, len(inputs))
 
     # inputs = torch.stack(inputs).squeeze(1)
     def get_batch_feature(_features, batch_size):

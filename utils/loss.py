@@ -1,6 +1,6 @@
 import random
 import torch
-from .utils import log_conditional_prob, hard_volume, soft_volume
+from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_prob
 from .utils import sample_path, sample_pair
 import numpy as np
 
@@ -13,5 +13,5 @@ def contrastive_loss(x, num_path, num_samples, raw_graph, margin=10000):
     neg = np.array(neg)
     p = log_conditional_prob(x[pos[:, 0], :], x[pos[:, 1], :]).mean()
     n = log_conditional_prob(x[neg[:, 0], :], x[neg[:, 1], :]).mean()
-    print(-p.item(), n.item())
-    return (-p) / (margin + n - p)
+    print(-p.item(), conditional_prob(x[pos[:, 0], :], x[pos[:, 1], :]).mean())
+    return -p + 0.01 * (margin + n)

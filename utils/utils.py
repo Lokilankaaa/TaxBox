@@ -19,6 +19,10 @@ def checkpoint(path_to_save, model):
     torch.save(path_to_save, model.state_dict())
 
 
+def sample_pos_and_negs():
+    pass
+
+
 def sample_pair(path, relation='son'):
     assert relation in ('son', 'descendant')
     if type(path) != tuple:
@@ -77,7 +81,7 @@ def hard_volume(x: torch.Tensor):
 
 
 def softplus(x, t):
-    #EPS in case of nan
+    # EPS in case of nan
     return F.softplus(x, t)
 
 
@@ -139,14 +143,26 @@ def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[s
         with torch.no_grad():
             features = _model(inputs).cpu().numpy()
         outputs.append(features)
-    np.save("features/" + label + ".npy", np.vstack(outputs))
+    res = np.vstack(outputs)
+    np.save("datasets_json/handcrafted/raw/features/" + label + ".npy",res)
+    return res
 
 
-def extract_features_for_imgs(_model, preprocess, path_to_imglist):
+def extract_features_for_imgs(_model, preprocess, path_to_imglist, l=None):
     img_list = [os.path.join(path_to_imglist, p) for p in os.listdir(path_to_imglist)]
-    for label in img_list:
-        extract_feature(_model, preprocess, [os.path.join(label, p) for p in os.listdir(label)], label.split('/')[-1],
-                        torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"), )
+    f = []
+    if l is not None:
+        label = os.path.join(path_to_imglist, l)
+        return extract_feature(_model, preprocess,
+                               [os.path.join(label, p) for p in os.listdir(label)],
+                               l, torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+    else:
+        for label in img_list:
+            f.append(extract_feature(_model, preprocess, [os.path.join(label, p) for p in os.listdir(label)],
+                                     label.split('/')[-1],
+                                     torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")))
+
+        return f
 
 
 def visualize_distribution(path_to_npy):

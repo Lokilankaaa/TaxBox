@@ -44,7 +44,7 @@ class Handcrafted(InMemoryDataset):
         self.raw_classes_graph = json.load(open(self.raw_paths[0]))
         self.traverse_tree(self.raw_classes_graph)
 
-        data_list = [Data(x=torch.Tensor(self.nodes), edge_index=torch.Tensor(np.array(self.edges)).type(torch.long),
+        data_list = [Data(x=torch.from_numpy(self.nodes), edge_index=torch.from_numpy(self.edges).type(torch.long),
                           raw_graph=self.raw_classes_graph)]
 
         if self.pre_filter is not None:

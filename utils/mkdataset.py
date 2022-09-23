@@ -154,6 +154,11 @@ def word_tree_pruner(head):
         return head_is_visual
 
 
+def sample_subset_from_wordnet(wordnet_json_root):
+    wordnet = json.load(open(wordnet_json_root))
+
+
+
 word_count = None
 if __name__ == '__main__':
     word_count = json.load(open('wordnet_count.json'))

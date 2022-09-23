@@ -9,8 +9,7 @@ import numpy as np
 import clip
 import random
 import torch.nn.functional as F
-from box_embeddings.modules.intersection import HardIntersection, GumbelIntersection
-from box_embeddings.modules.volume import HardVolume, SoftVolume, BesselApproxVolume
+
 
 EPS = 1e-4
 

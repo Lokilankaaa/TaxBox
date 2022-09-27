@@ -8,6 +8,7 @@ import requests
 import wikipedia
 from nltk.corpus import wordnet as wn
 import queue
+import pprint
 
 
 def mk_label_map():
@@ -158,9 +159,95 @@ def sample_subset_from_wordnet(wordnet_json_root):
     wordnet = json.load(open(wordnet_json_root))
 
 
+def construct_tree_to_dict(tree):
+    d = {}
+
+    def dfs(head):
+        d[head['name']] = head
+        if len(head['children']) == 0:
+            return
+        else:
+            for c in head['children']:
+                dfs(c)
+
+    dfs(tree)
+    return d
+
+
+def interactive_json_maker():
+    name_to_pointer = {}
+    tree = {}
+
+    def load():
+        if os.path.exists('../datasets_json/middle_handcrafted.json'):
+            t = json.load(open('../datasets_json/middle_handcrafted.json'))
+            n = construct_tree_to_dict(t)
+            return t, n
+        else:
+            return {}, {}
+
+    def insert_node(father, name, description):
+        if father == '':
+            assert len(tree.keys()) == 0
+            tree['name'] = name
+            tree['description'] = description
+            tree['children'] = []
+            name_to_pointer[name] = tree
+        else:
+            assert father in name_to_pointer.keys()
+            name_to_pointer[father]['children'].append({
+                'name': name,
+                'description': description,
+                'children': []
+            })
+            name_to_pointer[name] = name_to_pointer[father]['children'][-1]
+
+    def save():
+        with open('../datasets_json/middle_handcrafted.json', 'w') as f:
+            json.dump(tree, f)
+
+    tree, name_to_pointer = load()
+
+    while True:
+        command = input('whats your command? ')
+        if command == 'q' or command == 'quit':
+            break
+        elif command == 'i' or command == 'insert':
+            father = input('father: ').strip().lower()
+            name = input('name: ').strip().lower()
+            description = input('description: ').strip().lower()
+            insert_node(father, name, description)
+            print('insertion finished')
+        elif command == 'p' or command == 'print':
+            which = input('print which node? ').strip().lower()
+            if which == '':
+                pprint.pprint(tree)
+            else:
+                assert which in name_to_pointer.keys()
+                pprint.pprint(name_to_pointer[which])
+        elif command == 's' or command == 'save':
+            save()
+            print(len(name_to_pointer.keys()))
+        elif command == 'l' or command == 'load':
+            tree, name_to_pointer = load()
+        elif command == 'd' or command == 'delete':
+            which = input('print which node? ').strip().lower()
+            assert which in name_to_pointer.keys()
+            del name_to_pointer[which]
+        elif command == 'n' or command == 'number':
+            print(len(name_to_pointer.keys()))
+        elif command == 'sd' or command == 'self_defined':
+            c = input()
+        else:
+            print('invalid')
+            continue
+
+    save()
+
 
 word_count = None
 if __name__ == '__main__':
-    word_count = json.load(open('wordnet_count.json'))
-    word_tree = json.load(open('wordnet_dataset.json'))
-    pruned = word_tree_pruner(word_tree)
+    # word_count = json.load(open('wordnet_count.json'))
+    # word_tree = json.load(open('wordnet_dataset.json'))
+    # pruned = word_tree_pruner(word_tree)
+    interactive_json_maker()

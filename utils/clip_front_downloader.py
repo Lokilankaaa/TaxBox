@@ -8,56 +8,58 @@ import requests
 import os
 import tqdm
 import multiprocessing as mp
+from mkdataset import construct_tree_to_dict
 
 splits = ['dev', 'test', 'train']
 
 url = 'https://knn5.laion.ai/knn-service'
-data_raw = {"text": None, "image": None, "image_url": None, "modality": "image", "num_images": 10000,
-            "indice_name": "laion5B", "num_result_ids": 10000, "use_mclip": False, "deduplicate": True,
+data_raw = {"text": None, "image": None, "image_url": None, "modality": "image", "num_images": 1000,
+            "indice_name": "laion5B", "num_result_ids": 3000, "use_mclip": False, "deduplicate": True,
             "use_safety_model": True, "use_violence_detector": True, "aesthetic_score": "9", "aesthetic_weight": "0.5"}
 
-# datas = json.load(open("datasets_json/handcrafted.json"))
-# datas = {
-#     'pineapple': {
-#         'description': 'large sweet fleshy tropical fruit with a terminal tuft of stiff leaves; widely cultivated'
-#     },
-#     'juice': {
-#         'description': 'the liquid part that can be extracted from plant or animal tissue by squeezing or cooking'
-#     },
-#     'hamburger': {
-#         'description': 'a sandwich consisting of a fried cake of minced beef served on a bun, often with other ingredients'
-#     }
-# }
-# saved = {}
+num_workers = 30
+datas = json.load(open("../datasets_json/middle_handcrafted.json"))
+name_to_pointer = construct_tree_to_dict(datas)
+name_to_pointer_list = [v for k, v in name_to_pointer.items() if len(v['children']) == 0]
+i, j = len(name_to_pointer_list), len(name_to_pointer_list) // num_workers
+name_to_pointer_list = [name_to_pointer_list[l:l + j] if l + j < i else name_to_pointer_list[l:] for l in
+                        range(0, i, j)]
+saved = {}
+
+#
+# def get_links(head):
+#     if len(head['children']) == 0:
+#         text = head['name'].replace('_', ' ') + ',' + head['description']
+#         data_raw['text'] = text
+#         while True:
+#             try:
+#                 response = requests.post(url, data=json.dumps(data_raw), timeout=60)
+#                 if response.status_code == 200:
+#                     res = response.json()
+#                     saved[head['name']] = [r['url'] for r in res if 'url' in r.keys()]
+#                     saved[head['name']] = saved[head['name']] if len(saved[head['name']]) <= 200 else saved[head['name']][:200]
+#                     print(head['name'], len(saved[head['name']]))
+#                     break
+#             except Exception as e:
+#                 print('err', e)
+#                 time.sleep(60)
+#
+#     else:
+#         for c in head['children']:
+#             get_links(c)
 #
 #
-# def get_links(datas):
-#     for k, v in datas.items():
-#         if "children" not in v.keys():
-#             text = k + ',' + v['description']
-#             data_raw['text'] = text
-#             while True:
-#                 try:
-#                     response = requests.post(url, data=json.dumps(data_raw))
-#                     if response.status_code == 200:
-#                         res = response.json()
-#                         v['train'] = [r['url'] for r in res]
-#                         v['train'] = v['train'] if len(v['train']) <= 500 else v['train'][:500]
-#                         print(k, len(v['train']))
-#                         break
-#                 except Exception as e:
-#                     print('err', e)
-#                     time.sleep(60)
-#             saved[k] = v
-#
-#         else:
-#             for ck, cv in v['children'].items():
-#                 get_links({ck: cv})
+# def get_list_links(l):
+#     print("starting....")
+#     for ll in l:
+#         get_links(ll)
 #
 #
 # get_links(datas)
+# # with mp.Pool(num_workers) as p:
+# #     p.map(get_list_links, name_to_pointer_list)
 # #
-# with open('../datasets_json/saved_handcrafted_test.json', 'w', encoding='utf8') as f:
+# with open('../datasets_json/saved_middle_handcrafted_test.json', 'w', encoding='utf8') as f:
 #     json.dump(saved, f, ensure_ascii=False)
 
 headers = ("User-Agent",
@@ -100,19 +102,19 @@ def download_image(url, label, timeout, path, i):
 
 
 def download_one_class(label, value):
-    img_links = value['train']
+    img_links = value
     print("start:", label)
     if label not in []:
         for i, link in enumerate(tqdm.tqdm(img_links)):
             res = download_image(link, label, 100, '/data/home10b/xw/visualCon/handcrafted', i)
             if res['status'] == 'EXPIRED':
-                print(label, res['ex ception_message'], link)
+                print(label, res['exception_message'], link)
             elif res['status'] == 'TIMEOUT':
                 print(label, res['exception_message'], link)
     print("\n\ndone:", label)
 
 
-datas = json.load(open('../datasets_json/saved_handcrafted_test.json'))
+datas = json.load(open('../datasets_json/saved_middle_handcrafted_test.json'))
 
 pool = [mp.Process(target=download_one_class, args=(k, v)) for k, v in datas.items()]
 list([p.start() for p in pool])

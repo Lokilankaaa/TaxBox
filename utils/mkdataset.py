@@ -236,8 +236,10 @@ def interactive_json_maker():
             del name_to_pointer[which]
         elif command == 'n' or command == 'number':
             print(len(name_to_pointer.keys()))
-        elif command == 'sd' or command == 'self_defined':
-            c = input()
+        elif command == 'ls' or command == 'list':
+            which = input('list which node children? ').strip().lower()
+            assert which in name_to_pointer.keys()
+            pprint.pprint([c['name'] for c in name_to_pointer[which]['children']])
         else:
             print('invalid')
             continue

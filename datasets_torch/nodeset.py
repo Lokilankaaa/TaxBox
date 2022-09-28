@@ -8,6 +8,7 @@ import os.path as osp
 import os
 from PIL import Image
 
+
 class NodeSet(Dataset):
     def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=500):
         self.transform = img_transform

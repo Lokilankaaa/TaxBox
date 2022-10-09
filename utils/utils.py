@@ -10,12 +10,16 @@ import clip
 import random
 import torch.nn.functional as F
 
-
 EPS = 1e-4
 
 
 def checkpoint(path_to_save, model):
-    torch.save(path_to_save, model.state_dict())
+    print('saving model to ' + path_to_save)
+    if type(model) == torch.nn.DataParallel:
+        sd = model.module.state_dict()
+    else:
+        sd = model.state_dict()
+    torch.save(sd, path_to_save)
 
 
 def sample_pos_and_negs():
@@ -48,23 +52,26 @@ def check_common_path(seq_x, seq_y):
 
 
 def check_same_path(seq_x, seq_y):
-    if type(seq_x) == list:
-        seq_x = np.array(seq_x, dtype=np.int32)
+    # if type(seq_x) == list:
+    #     seq_x = np.array(seq_x, dtype=np.int32)
     if type(seq_y) == list:
         seq_y = np.array(seq_y, dtype=np.int32)
+    for s in seq_x:
+        s = np.array(s, dtype=np.int32)
+        if len(s) == len(seq_y) and (s - seq_y).sum(-1) == 0:
+            return True
 
-    return ((seq_x - seq_y).sum(-1) == 0).sum() != 0
+    return False
 
 
 def sample_path(raw_graph, num=1):
     paths = []
     while len(paths) < num:
         path = []
-        head = raw_graph['object']
+        head = raw_graph
         path.append(head['id'])
-        while 'children' in head.keys():
-            selected = random.choice(head['children'])
-            head = selected[list(selected.keys())[0]]
+        while len(head['children']) > 0:
+            head = random.choice(head['children'])
             path.append(head['id'])
         if len(paths) != 0 and check_same_path(paths, path):
             continue
@@ -85,6 +92,8 @@ def softplus(x, t):
 
 
 def soft_volume(x: torch.Tensor, t=1):
+    if x.dim() == 1:
+        x = x.unsqueeze(0)
     assert x.dim() == 2
     features_len = x.shape[-1] // 2
     box_length = x[:, features_len:] * 2
@@ -92,6 +101,10 @@ def soft_volume(x: torch.Tensor, t=1):
 
 
 def hard_intersection(x, y):
+    if x.dim() == 1:
+        x = x.unsqueeze(0)
+    if y.dim() == 1:
+        y = y.unsqueeze(0)
     assert x.dim() == 2, y.dim() == 2
     x_center, x_offset = x.chunk(2, -1)
     y_center, y_offset = y.chunk(2, -1)
@@ -124,6 +137,7 @@ def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[s
             inputs.append(preprocess(i).to(device))
         except:
             continue
+
     # print(label, len(inputs))
 
     # inputs = torch.stack(inputs).squeeze(1)
@@ -143,7 +157,7 @@ def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[s
             features = _model(inputs).cpu().numpy()
         outputs.append(features)
     res = np.vstack(outputs)
-    np.save("datasets_json/handcrafted/raw/features/" + label + ".npy",res)
+    np.save("datasets_json/handcrafted/raw/features/" + label + ".npy", res)
     return res
 
 

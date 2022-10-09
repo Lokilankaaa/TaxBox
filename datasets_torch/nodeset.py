@@ -10,7 +10,7 @@ from PIL import Image
 
 
 class NodeSet(Dataset):
-    def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=500):
+    def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=50):
         self.transform = img_transform
         self.tokenize = text_tokenize
         self.raw_graph = None
@@ -19,6 +19,7 @@ class NodeSet(Dataset):
         self.id_to_imgs = []
         self.id_to_children = []
         self.id_to_text = []
+        self._id = 0
         self.root = root
         self.img_root = img_root
         self.max_imgs_per_node = max_imgs_per_node
@@ -35,7 +36,7 @@ class NodeSet(Dataset):
 
     @property
     def raw_files(self):
-        return ['handcrafted.json']
+        return ['middle_handcrafted.json']
 
     def _process(self):
         if self.check_whether_processed():
@@ -51,32 +52,35 @@ class NodeSet(Dataset):
         else:
             raw = json.load(open(osp.join(self.root, self.raw_files[0])))
 
-            def _traverse_tree(head, _id):
-                assert len(self.id_to_name) == _id and len(self.id_to_children) == _id and \
-                       len(self.id_to_text) == _id and len(self.id_to_imgs) == _id
-                if 'children' not in head.keys():
-                    head['id'] = _id
-                    self.name_to_id[head['name']] = _id
+            def _traverse_tree(head):
+                assert len(self.id_to_name) == self._id and len(self.id_to_children) == self._id and \
+                       len(self.id_to_text) == self._id and len(self.id_to_imgs) == self._id
+                if len(head['children']) == 0:
+                    head['id'] = self._id
+                    self.name_to_id[head['name']] = self._id
+                    self.name_to_id[head['name']] = self._id
                     self.id_to_name.append(head['name'])
                     self.id_to_text.append(head['name'] + ',' + head['description'])
                     self.id_to_children.append([])
                     self.id_to_imgs.append([osp.join(osp.join(self.img_root, head['name'], f)) for f in
                                             os.listdir(osp.join(self.img_root, head['name']))])
-                    del head['name']
-                    del head['description']
+                    self._id += 1
                 else:
-                    self.name_to_id[head['name']] = _id
+                    head['id'] = self._id
+                    self.name_to_id[head['name']] = self._id
                     self.id_to_name.append(head['name'])
                     self.id_to_text.append(head['name'] + ',' + head['description'])
                     self.id_to_imgs.append([])
-                    self.id_to_children.append(list(range(_id + 1, _id + len(head['children']) + 1)))
+                    self.id_to_children.append([])
+                    self._id += 1
                     for i, child in enumerate(head['children']):
-                        _traverse_tree(child, _id + i + 1)
+                        _traverse_tree(child)
+                    self.id_to_children[head['id']] = [i['id'] for i in head['children']]
 
-                    del head['name']
-                    del head['description']
+                del head['name']
+                del head['description']
 
-            _traverse_tree(raw, 0)
+            _traverse_tree(raw)
             self.raw_graph = raw
             torch.save({'raw_graph': self.raw_graph, 'id_to_imgs': self.id_to_imgs, 'id_to_text': self.id_to_text,
                         'id_to_name': self.id_to_name, 'id_to_children': self.id_to_children,
@@ -102,13 +106,8 @@ class NodeSet(Dataset):
         inputs = []
         for i in imgs:
             try:
-                inputs.append(self.transform(Image.open(i).convert('RGB')))
+                inputs.append(self.transform(Image.open(i).convert('RGB')).unsqueeze(0))
             except:
                 continue
 
-        return {
-            'id': idx,
-            'name': self.id_to_name[idx],
-            'text': t_des,
-            'imgs': inputs
-        }
+        return idx, self.id_to_name[idx], t_des, torch.cat(inputs)

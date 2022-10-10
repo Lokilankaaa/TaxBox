@@ -1,7 +1,7 @@
 import tqdm
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2'
 
 from datasets_torch.handcrafted import Handcrafted
 from datasets_torch.nodeset import NodeSet
@@ -39,11 +39,11 @@ def prepare(model_name='', lr=0.001, step_size=5, gamma=0.1, parallel=False):
 def train(model, dataset, optimizer, device):
     writer = SummaryWriter(comment='NodeEncoder')
     model.train()
-    sample_nums = 3
+    sample_nums = 4
     total_iters = 0
-    for e in range(40):
+    for e in range(50):
         pe, pp, pn = 0, 0, 0
-        for se in tqdm.tqdm(range(300 // sample_nums)):
+        for se in tqdm.tqdm(range(400 // sample_nums)):
             paths = sample_path(dataset.raw_graph, 4)
             pos = [sample_pair(random.choice(paths)) for _ in range(sample_nums)]
             neg = [sample_pair(tuple(random.sample(paths, k=2))) for _ in range(sample_nums)]
@@ -52,13 +52,16 @@ def train(model, dataset, optimizer, device):
             batch = np.hstack([pos[:, 0], pos[:, 1], neg[:, 0], neg[:, 1]])
 
             optimizer.zero_grad()
-            outs = []
+            text, img = [], []
+
             for i in batch:
                 inputs = dataset[i]
-                _id, name, text, imgs = inputs
-                text = text.to(device)
-                imgs = imgs.to(device)
-                outs.append(model(text, imgs))
+                _id, _name, _text, _imgs = inputs
+                text = _text if len(text) == 0 else torch.cat([text, _text])
+                img = _imgs if len(img) == 0 else torch.cat([img, _imgs])
+            text = text.to(device)
+            img = img.to(device)
+            outs = model(text, img)
 
             loss, p, n = contrastive_loss(outs)
             total_iters += 1

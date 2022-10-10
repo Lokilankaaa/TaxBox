@@ -3,3 +3,5 @@ dataset_json/imagnet_dataset.json
 .idea
 .vscode
 .DS_Store
+test_nonvisual
+res.txt

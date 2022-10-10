@@ -26,7 +26,7 @@ def sample_pos_and_negs():
     pass
 
 
-def sample_pair(path, relation='son'):
+def sample_pair(path, relation='descendant'):
     assert relation in ('son', 'descendant')
     if type(path) != tuple:
         pathx = path

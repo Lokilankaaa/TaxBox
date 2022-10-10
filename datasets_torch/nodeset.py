@@ -101,13 +101,15 @@ class NodeSet(Dataset):
             else:
                 return self.id_to_imgs[_i]
 
-        imgs = getimgs(idx)
-        imgs = random.choices(imgs, k=self.max_imgs_per_node) if len(imgs) > self.max_imgs_per_node else imgs
+        imgs_ = getimgs(idx)
+        imgs = random.choices(imgs_, k=self.max_imgs_per_node) if len(imgs_) > self.max_imgs_per_node else imgs
         inputs = []
-        for i in imgs:
+        while len(imgs) != 0:
+            i = imgs[0]
+            imgs.remove(i)
             try:
                 inputs.append(self.transform(Image.open(i).convert('RGB')).unsqueeze(0))
             except:
-                continue
+                imgs.append(random.choice(imgs_))
 
-        return idx, self.id_to_name[idx], t_des, torch.cat(inputs)
+        return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)

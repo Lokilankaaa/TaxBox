@@ -21,10 +21,10 @@ def contrastive_loss(x, num_path, num_samples, raw_graph, margin=2000):
 def contrastive_loss(pairs):
     margin = 5
     step = len(pairs) // 4
-    p = log_conditional_prob(torch.cat(pairs[:step]), torch.cat(pairs[step: 2 * step])).mean()
-    n = log_conditional_prob(torch.cat(pairs[2 * step: 3 * step]), torch.cat(pairs[3 * step:])).mean()
+    p = log_conditional_prob(pairs[:step], pairs[step: 2 * step]).mean()
+    n = log_conditional_prob(pairs[2 * step: 3 * step], pairs[3 * step:]).mean()
     # print('p_loss:{}'.format(-p.item()))
     loss = -p
     if margin + n > 0:
-        loss += 1 * (margin + n)
+        loss += 0.5 * (margin + n)
     return loss, -p.item(), (margin + n).item()

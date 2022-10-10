@@ -17,22 +17,32 @@ class NodeEncoder(torch.nn.Module):
         self.to(torch.float32)
 
     def forward(self, text_embedding, img_features):
+        b = img_features.shape[0]
+        img_features = torch.cat(img_features.chunk(50, 1))
         tx = self.clip.encode_image(img_features)
         tx = F.relu(self.project_image(tx))
-        tx = torch.cat([tx, torch.Tensor(tx.shape[0] * [[1e-6] * tx.shape[-1]]).to(tx.device)], dim=-1).to(torch.float32)
+        tx = torch.cat([tx, torch.Tensor(tx.shape[0] * [[1e-6] * tx.shape[-1]]).to(tx.device)], dim=-1).to(
+            torch.float32)
 
         ix = self.clip.encode_text(text_embedding)
         ix = F.relu(self.project_text(ix))
-        ix = torch.cat([ix, torch.from_numpy(
-            np.random.multivariate_normal(np.zeros(256),
-                                          np.cov(tx.transpose(1, 0).chunk(2)[0].detach().cpu().numpy()))).to(
-                                          ix.device).unsqueeze(0)], dim=-1).to(torch.float32)
 
-        nodes = torch.cat([ix, tx]).to(torch.float32)
-        edges = torch.Tensor([list(range(1, len(nodes))), [0] * (len(nodes) - 1)]).to(nodes.device).type(torch.long)
+        nodes, edges = [], []
+        for i, (_ix, _tx) in enumerate(zip(ix, tx.chunk(b, 0))):
+            _ix = _ix.unsqueeze(0)
+            _ix = torch.cat([_ix, torch.from_numpy(
+                np.random.multivariate_normal(np.zeros(256),
+                                              np.cov(_tx.transpose(1, 0).chunk(2)[0].detach().cpu().numpy()))).to(
+                ix.device).unsqueeze(0)], dim=-1).to(torch.float32)
+            nodes.append(torch.cat([_ix, _tx]).to(torch.float32))
+            edges.append(
+                torch.Tensor([list(range(1 + i * 51, len(nodes[0]) + i * 51)), [i * 51] * 50]).to(nodes[0].device).type(
+                    torch.long))
+        nodes = torch.cat(nodes, dim=0)
+        edges = torch.cat(edges, dim=1)
 
         box_embed = F.relu(self.fusion_module(x=nodes, edge_index=edges))
 
-        out = F.relu(self.project_box(box_embed[0]))
+        out = F.relu(self.project_box(box_embed[::51]))
 
         return out

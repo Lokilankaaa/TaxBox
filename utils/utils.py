@@ -10,7 +10,44 @@ import clip
 import random
 import torch.nn.functional as F
 
-EPS = 1e-4
+EPS = 1e-13
+
+
+def batch_load_img(imgs_, transform, max_k=50):
+    imgs = random.choices(imgs_, k=max_k) if len(imgs_) > max_k else imgs_
+    inputs = []
+    while len(imgs) != 0:
+        i = imgs[0]
+        imgs.remove(i)
+        try:
+            inputs.append(transform(Image.open(i).convert('RGB')).unsqueeze(0))
+        except:
+            imgs.append(random.choice(imgs_))
+    return inputs
+
+
+def get_graph_box_embedding(dataset, model, save=True, load=True):
+    if load and os.path.exists('embeddings.npy'):
+        embeddings = np.load('embeddings.npy')
+        return embeddings
+
+    embeddings = []
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model.to(device)
+    for d in dataset:
+        _, _, t, i = d
+        t = t.to(device)
+        i = i.to(device)
+        model.eval()
+        with torch.no_grad():
+            out = model(t, i)
+            embeddings.append(out.cpu().numpy())
+
+    embeddings = np.array(embeddings).reshape(-1, 256)
+    if save:
+        np.save('embeddings.npy', embeddings)
+
+    return embeddings
 
 
 def checkpoint(path_to_save, model):
@@ -20,10 +57,6 @@ def checkpoint(path_to_save, model):
     else:
         sd = model.state_dict()
     torch.save(sd, path_to_save)
-
-
-def sample_pos_and_negs():
-    pass
 
 
 def sample_pair(path, relation='descendant'):
@@ -54,6 +87,8 @@ def check_common_path(seq_x, seq_y):
 def check_same_path(seq_x, seq_y):
     # if type(seq_x) == list:
     #     seq_x = np.array(seq_x, dtype=np.int32)
+    #     if seq_x.ndim == 1:
+    #         seq_x = np.expand_dims(seq_x, axis=0)
     if type(seq_y) == list:
         seq_y = np.array(seq_y, dtype=np.int32)
     for s in seq_x:
@@ -64,26 +99,69 @@ def check_same_path(seq_x, seq_y):
     return False
 
 
-def sample_path(raw_graph, num=1):
+def sample_triples(raw_graph, num=1, n_num=4):
+    pointer = []
+    paths = sample_path(raw_graph, num, pointer)
+    triple = []
+    for i, p in enumerate(paths):
+        anchor = random.choice(range(1, len(p)))
+        pos = random.choice(range(0, anchor))
+        head = pointer[i][anchor - 1]
+        npath = []
+        negs = []
+        while len(negs) < n_num:
+            if len(head['children']) > 1:
+                nhead = random.choice(head['children'])
+                nstart = nhead['id']
+                while p[anchor] == nstart:
+                    nhead = random.choice(head['children'])
+                    nstart = nhead['id']
+                npath.append(nstart)
+                while len(nhead['children']) > 0:
+                    nhead = random.choice(nhead['children'])
+                    npath.append(nhead['id'])
+            else:
+                npath = sample_path(raw_graph)[0]
+                while check_same_path([p], npath):
+                    npath = sample_path(raw_graph)[0]
+                common_i = check_common_path(npath, p)
+                npath = npath[common_i:]
+            neg = random.choice(npath)
+            negs.append(neg)
+        triple.append([p[anchor], p[pos]] + negs)
+    return triple
+
+
+def sample_path(raw_graph, num=1, pointer=None):
     paths = []
     while len(paths) < num:
         path = []
+        pp = []
         head = raw_graph
         path.append(head['id'])
+        if pointer is not None:
+            pp.append(head)
         while len(head['children']) > 0:
             head = random.choice(head['children'])
             path.append(head['id'])
+            if pointer is not None:
+                pp.append(head)
         if len(paths) != 0 and check_same_path(paths, path):
             continue
         paths.append(path)
+        if pointer is not None:
+            pointer.append(pp)
     return paths
 
 
-def hard_volume(x: torch.Tensor):
+def hard_volume(x: torch.Tensor, box_mode=False):
     assert x.dim() == 2
-    features_len = x.shape[-1] // 2
-    box_offset = x[:, features_len:]
-    return 2. * box_offset.prod(-1)
+    z, Z = x.chunk(2, -1)
+    if box_mode:
+        box_length = Z - z
+    else:
+        box_length = Z * 2
+    return box_length.prod(-1)
 
 
 def softplus(x, t):
@@ -91,39 +169,85 @@ def softplus(x, t):
     return F.softplus(x, t)
 
 
-def soft_volume(x: torch.Tensor, t=1):
+def soft_volume(x: torch.Tensor, t=1, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     assert x.dim() == 2
-    features_len = x.shape[-1] // 2
-    box_length = x[:, features_len:] * 2
-    return (t * softplus(box_length, t)).clamp(min=EPS)
+    z, Z = x.chunk(2, -1)
+    if box_mode:
+        box_length = Z - z
+    else:
+        box_length = Z * 2
+    return softplus(box_length, 1 / t).clamp(min=EPS)
 
 
-def hard_intersection(x, y):
+def bessel_approx_volume(x, t=1, box_mode=False):
+    EULER_GAMMA = 0.57721566490153286060
+    if x.dim() == 1:
+        x = x.unsqueeze(0)
+    z, Z = x.chunk(2, -1)
+    if box_mode:
+        box_length = Z - z
+    else:
+        box_length = Z * 2
+    return softplus(box_length - 2 * EULER_GAMMA * t, 1 / t).clamp(min=EPS)
+
+
+def hard_intersection(x, y, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     if y.dim() == 1:
         y = y.unsqueeze(0)
     assert x.dim() == 2, y.dim() == 2
-    x_center, x_offset = x.chunk(2, -1)
-    y_center, y_offset = y.chunk(2, -1)
-    r = torch.min(x_center + x_offset, y_center + y_offset)
-    l = torch.max(x_center - x_offset, y_center - y_offset)
-    cen, off = (l + r) / 2, (r - l) / 2
-    return torch.cat([cen, off], dim=-1)
+    xz, xZ = x.chunk(2, -1)
+    yz, yZ = y.chunk(2, -1)
+    if box_mode:
+        Z = torch.min(xZ, yZ)
+        z = torch.max(xz, yz)
+        return torch.cat([z, Z], dim=-1)
+    else:
+        Z = torch.min(xz + xZ, yz + yZ)
+        z = torch.max(xz - xZ, yz - yZ)
+        cen, off = (z + Z) / 2, (Z - z) / 2
+        return torch.cat([cen, off], dim=-1)
+
+
+def log_sum_exp(x, y):
+    return torch.logaddexp(x, y)
+
+
+def gumbel_intersection(x, y, beta=1, box_mode=False):
+    if x.dim() == 1:
+        x = x.unsqueeze(0)
+    if y.dim() == 1:
+        y = y.unsqueeze(0)
+    xz, xZ = x.chunk(2, -1)
+    yz, yZ = y.chunk(2, -1)
+    if box_mode:
+        z = -beta * (log_sum_exp(-xZ / beta, -yZ / beta))
+        Z = beta * (log_sum_exp(xz / beta, yz / beta))
+        return torch.cat([z, Z], dim=-1)
+    else:
+        r = -beta * (log_sum_exp(-(xz + xZ) / beta, -(yz + yZ) / beta))
+        l = beta * (log_sum_exp((xz - xZ) / beta, (yz - yZ) / beta))
+        cen, off = (l + r) / 2, (r - l) / 2
+        return torch.cat([cen, off], dim=-1)
 
 
 # log p(x|y)
-def log_conditional_prob(x, y):
-    inter = hard_intersection(x, y)
-    log_prob = torch.log(soft_volume(inter) / soft_volume(y)).sum(-1).clamp(max=-EPS)
+def log_conditional_prob(x, y, box_mode=False):
+    inter = hard_intersection(x, y, box_mode=box_mode)
+    log_prob = (torch.log(soft_volume(inter, box_mode=box_mode)) - torch.log(soft_volume(y, box_mode=box_mode))).sum(
+        -1).clamp(max=-EPS)
+    # torch.log(soft_volume(inter)
     return log_prob
 
 
 # p(x | y)
-def conditional_prob(x, y):
-    return (soft_volume(hard_intersection(x, y)) / soft_volume(y)).prod(-1)
+def conditional_prob(x, y, box_mode=False):
+    return (soft_volume(hard_intersection(x, y, box_mode=box_mode), box_mode=box_mode) / soft_volume(y,
+                                                                                                     box_mode=box_mode)).prod(
+        -1).clamp(min=EPS)
 
 
 def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[str]], label, device):

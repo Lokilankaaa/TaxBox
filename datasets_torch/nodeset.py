@@ -7,10 +7,12 @@ from torch.utils.data import Dataset
 import os.path as osp
 import os
 from PIL import Image
+import numpy as np
+from utils.utils import batch_load_img
 
 
 class NodeSet(Dataset):
-    def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=50):
+    def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=50, train_mask=None):
         self.transform = img_transform
         self.tokenize = text_tokenize
         self.raw_graph = None
@@ -23,8 +25,13 @@ class NodeSet(Dataset):
         self.root = root
         self.img_root = img_root
         self.max_imgs_per_node = max_imgs_per_node
+        self.train_mask = train_mask
 
         self._process()
+
+        if train_mask is not None:
+            assert len(train_mask) == len(self.id_to_name)
+            self.valid_mask = np.logical_not(train_mask)
 
     def check_whether_processed(self):
         ls = [osp.join(self.root, f) for f in self.processed_files]
@@ -102,14 +109,6 @@ class NodeSet(Dataset):
                 return self.id_to_imgs[_i]
 
         imgs_ = getimgs(idx)
-        imgs = random.choices(imgs_, k=self.max_imgs_per_node) if len(imgs_) > self.max_imgs_per_node else imgs
-        inputs = []
-        while len(imgs) != 0:
-            i = imgs[0]
-            imgs.remove(i)
-            try:
-                inputs.append(self.transform(Image.open(i).convert('RGB')).unsqueeze(0))
-            except:
-                imgs.append(random.choice(imgs_))
+        inputs = batch_load_img(imgs_, self.transform, self.max_imgs_per_node)
 
         return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)

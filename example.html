@@ -1,0 +1,263 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1></h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1></h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 500px;
+                 background-color: #ffffff;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+             #loadingBar {
+                 position:absolute;
+                 top:0px;
+                 left:0px;
+                 width: 100%;
+                 height: 500px;
+                 background-color:rgba(200,200,200,0.8);
+                 -webkit-transition: all 0.5s ease;
+                 -moz-transition: all 0.5s ease;
+                 -ms-transition: all 0.5s ease;
+                 -o-transition: all 0.5s ease;
+                 transition: all 0.5s ease;
+                 opacity:1;
+             }
+
+             #bar {
+                 position:absolute;
+                 top:0px;
+                 left:0px;
+                 width:20px;
+                 height:20px;
+                 margin:auto auto auto auto;
+                 border-radius:11px;
+                 border:2px solid rgba(30,30,30,0.05);
+                 background: rgb(0, 173, 246); /* Old browsers */
+                 box-shadow: 2px 0px 4px rgba(0,0,0,0.4);
+             }
+
+             #border {
+                 position:absolute;
+                 top:10px;
+                 left:10px;
+                 width:500px;
+                 height:23px;
+                 margin:auto auto auto auto;
+                 box-shadow: 0px 0px 4px rgba(0,0,0,0.2);
+                 border-radius:10px;
+             }
+
+             #text {
+                 position:absolute;
+                 top:8px;
+                 left:530px;
+                 width:30px;
+                 height:50px;
+                 margin:auto auto auto auto;
+                 font-size:22px;
+                 color: #000000;
+             }
+
+             div.outerBorder {
+                 position:relative;
+                 top:400px;
+                 width:600px;
+                 height:44px;
+                 margin:auto auto auto auto;
+                 border:8px solid rgba(0,0,0,0.1);
+                 background: rgb(252,252,252); /* Old browsers */
+                 background: -moz-linear-gradient(top,  rgba(252,252,252,1) 0%, rgba(237,237,237,1) 100%); /* FF3.6+ */
+                 background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,rgba(252,252,252,1)), color-stop(100%,rgba(237,237,237,1))); /* Chrome,Safari4+ */
+                 background: -webkit-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* Chrome10+,Safari5.1+ */
+                 background: -o-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* Opera 11.10+ */
+                 background: -ms-linear-gradient(top,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* IE10+ */
+                 background: linear-gradient(to bottom,  rgba(252,252,252,1) 0%,rgba(237,237,237,1) 100%); /* W3C */
+                 filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#fcfcfc', endColorstr='#ededed',GradientType=0 ); /* IE6-9 */
+                 border-radius:72px;
+                 box-shadow: 0px 0px 10px rgba(0,0,0,0.2);
+             }
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+            <div id="loadingBar">
+              <div class="outerBorder">
+                <div id="text">0%</div>
+                <div id="border">
+                  <div id="bar"></div>
+                </div>
+              </div>
+            </div>
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#97c2fc", "id": 0, "label": "0object", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 1, "label": "1living_thing", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 146, "label": "146artifact", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 2, "label": "2plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 27, "label": "27animal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 3, "label": "3vascular_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 16, "label": "16wilding", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 25, "label": "25air_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 4, "label": "4herb", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 9, "label": "9woody_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 13, "label": "13seed_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 5, "label": "5gramineous_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 6, "label": "6crucifer", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 7, "label": "7legume", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 8, "label": "8vegetable", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 10, "label": "10tree", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 11, "label": "11shrub", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 12, "label": "12bramble", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 14, "label": "14flowering_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 15, "label": "15gymnosperm", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 17, "label": "17wildflower", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 18, "label": "18goldenrod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 19, "label": "19fleabane", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 20, "label": "20sand_verbena", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 21, "label": "21indian_paintbrush", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 22, "label": "22coneflower", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 23, "label": "23pasqueflower", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 24, "label": "24flame_flower", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 26, "label": "26lipstick_plant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 28, "label": "28chordate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 100, "label": "100invertebrate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 143, "label": "143domestic_animal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 29, "label": "29vertebrate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 97, "label": "97tunicate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 99, "label": "99cephalochordate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 30, "label": "30bird", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 34, "label": "34mammal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 85, "label": "85aquatic_vertebrate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 89, "label": "89reptile", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 94, "label": "94amphibian", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 31, "label": "31passerine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 32, "label": "32aquatic_bird", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 33, "label": "33gallinaceous_bird", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 35, "label": "35placental", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 83, "label": "83metatherian", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 84, "label": "84fossorial_mammal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 36, "label": "36carnivore", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 51, "label": "51ungulate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 71, "label": "71rodent", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 75, "label": "75primate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 79, "label": "79aquatic_mammal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 37, "label": "37canine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 40, "label": "40feline", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 42, "label": "42musteline_mammal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 47, "label": "47bear", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 48, "label": "48procyonid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 38, "label": "38fox", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 39, "label": "39wolf", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 41, "label": "41cat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 43, "label": "43weasel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 44, "label": "44marten", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 45, "label": "45otter", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 46, "label": "46badger", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 49, "label": "49raccoon", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 50, "label": "50coati", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 52, "label": "52even-toed_ungulate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 63, "label": "63odd-toed_ungulate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 53, "label": "53ruminant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 61, "label": "61swine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 62, "label": "62camel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 54, "label": "54bovid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 58, "label": "58deer", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 59, "label": "59giraffe", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 60, "label": "60pronghorn", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 55, "label": "55bovine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 56, "label": "56sheep", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 57, "label": "57antelope", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 64, "label": "64equine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 69, "label": "69rhino", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 70, "label": "70tapir", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 65, "label": "65horse", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 66, "label": "66ass", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 67, "label": "67zebra", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 68, "label": "68mule", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 72, "label": "72squirrel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 73, "label": "73rat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 74, "label": "74porcupine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 76, "label": "76monkey", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 77, "label": "77hominid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 78, "label": "78ape", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 80, "label": "80cetacean", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 81, "label": "81pinniped_mammal", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 82, "label": "82sea_cow", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 86, "label": "86fish", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 87, "label": "87bony_fish", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 88, "label": "88cartilaginous_fish", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 90, "label": "90snake", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 91, "label": "91saurian", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 92, "label": "92crocodilian_reptile", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 93, "label": "93crocodile", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 95, "label": "95frog", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 96, "label": "96salamander", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 98, "label": "98ascidian", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 101, "label": "101arthropod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 129, "label": "129mollusk", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 142, "label": "142worm", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 102, "label": "102insect", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 115, "label": "115arachnid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 120, "label": "120crustacean", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 103, "label": "103lepidopterous_insect", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 106, "label": "106beetle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 107, "label": "107hymenopterous_insect", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 111, "label": "111dipterous_insect", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 104, "label": "104butterfly", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 105, "label": "105moth", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 108, "label": "108wasp", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 109, "label": "109bee", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 110, "label": "110ant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 112, "label": "112fly", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 113, "label": "113mosquito", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 114, "label": "114fruit_fly", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 116, "label": "116acarine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 117, "label": "117spider", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 118, "label": "118false_scorpion", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 119, "label": "119whip-scorpion", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 121, "label": "121decapod_crustacean", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 125, "label": "125malacostracan_crustacean", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 128, "label": "128barnacle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 122, "label": "122crab", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 123, "label": "123lobster", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 124, "label": "124shrimp", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 126, "label": "126isopod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 127, "label": "127amphipod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 130, "label": "130gastropod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 134, "label": "134bivalve", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 138, "label": "138cephalopod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 131, "label": "131seasnail", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 132, "label": "132snail", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 133, "label": "133cowrie", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 135, "label": "135clam", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 136, "label": "136mussel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 137, "label": "137oyster", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 139, "label": "139decapod", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 140, "label": "140squid", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 141, "label": "141cuttlefish", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 144, "label": "144dog", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 145, "label": "145domestic_cat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 147, "label": "147instrumentality", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 272, "label": "272structure", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 280, "label": "280covering", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 292, "label": "292commodity", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 295, "label": "295creation", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 148, "label": "148conveyance", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 182, "label": "182container", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 202, "label": "202device", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 245, "label": "245equipment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 249, "label": "249implement", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 257, "label": "257furnishing", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 267, "label": "267system", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 268, "label": "268weaponry", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 269, "label": "269toiletry", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 149, "label": "149vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 176, "label": "176public_transport", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 179, "label": "179litter", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 150, "label": "150wheeled_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 159, "label": "159craft", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 173, "label": "173military_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 174, "label": "174rocket", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 175, "label": "175horse-drawn_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 151, "label": "151self-propelled_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 155, "label": "155car", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 158, "label": "158bicycle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 152, "label": "152motor_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 153, "label": "153locomotive", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 154, "label": "154armored_vehicle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 156, "label": "156carriage", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 157, "label": "157freight_car", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 160, "label": "160aircraft", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 167, "label": "167vessel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 172, "label": "172spacecraft", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 161, "label": "161airplane", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 162, "label": "162warplane", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 163, "label": "163helicopter", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 164, "label": "164glider", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 165, "label": "165airship", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 166, "label": "166inflatable", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 168, "label": "168ship", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 169, "label": "169boat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 170, "label": "170sailing_vessel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 171, "label": "171fishing_boat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 177, "label": "177bus", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 178, "label": "178train", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 180, "label": "180palanquin", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 181, "label": "181stretcher", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 183, "label": "183bag", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 189, "label": "189box", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 195, "label": "195case", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 197, "label": "197receptacle", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 198, "label": "198glass", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 199, "label": "199basket", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 184, "label": "184pouch", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 187, "label": "187backpack", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 188, "label": "188plastic bag", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 185, "label": "185pocket", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 186, "label": "186waist_pack", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 190, "label": "190chest", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 191, "label": "191strongbox", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 192, "label": "192crate", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 193, "label": "193carton", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 194, "label": "194coffin", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 196, "label": "196baggage", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 200, "label": "200hamper", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 201, "label": "201wicker_basket", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 203, "label": "203instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 221, "label": "221mechanism", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 230, "label": "230machine", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 233, "label": "233musical_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 239, "label": "239support", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 242, "label": "242electrical_device", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 204, "label": "204weapon", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 209, "label": "209measuring_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 213, "label": "213scientific_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 216, "label": "216medical_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 205, "label": "205gun", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 206, "label": "206missile", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 207, "label": "207sword", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 208, "label": "208bow", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 210, "label": "210timepiece", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 211, "label": "211thermometer", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 212, "label": "212radar", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 214, "label": "214magnifier", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 215, "label": "215accelerator", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 217, "label": "217surgical_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 218, "label": "218surgical_knife", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 219, "label": "219endoscope", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 220, "label": "220syringe", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 222, "label": "222mechanical_device", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 227, "label": "227control", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 223, "label": "223wheel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 224, "label": "224pulley", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 225, "label": "225pump", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 226, "label": "226hook", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 228, "label": "228switch", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 229, "label": "229valve", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 231, "label": "231computer", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 232, "label": "232motor", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 234, "label": "234stringed_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 237, "label": "237wind_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 238, "label": "238percussion_instrument", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 235, "label": "235guitar", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 236, "label": "236piano", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 240, "label": "240rack", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 241, "label": "241bracket", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 243, "label": "243circuit", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 244, "label": "244battery", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 246, "label": "246electronic_equipment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 248, "label": "248sports_equipment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 247, "label": "247telephone", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 250, "label": "250tool", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 256, "label": "256utensil", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 251, "label": "251hand_tool", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 254, "label": "254cutting_implement", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 255, "label": "255hammer", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 252, "label": "252wrench", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 253, "label": "253saw", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 258, "label": "258furniture", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 259, "label": "259table", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 260, "label": "260lamp", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 261, "label": "261cabinet", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 262, "label": "262seat", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 265, "label": "265curtain", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 266, "label": "266carpet", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 263, "label": "263chair", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 264, "label": "264bench", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 270, "label": "270cosmetic", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 271, "label": "271perfume", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 273, "label": "273building", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 279, "label": "279bridge", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 274, "label": "274house", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 275, "label": "275worship", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 276, "label": "276restaurant", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 277, "label": "277hotel", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 278, "label": "278medical_building", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 281, "label": "281clothing", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 289, "label": "289protective_covering", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 282, "label": "282garment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 287, "label": "287headdress", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 288, "label": "288footwear", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 283, "label": "283overgarment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 284, "label": "284trouser", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 285, "label": "285undergarment", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 286, "label": "286shirt", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 290, "label": "290shield", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 291, "label": "291armor", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 293, "label": "293consumer_goods", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 294, "label": "294drygoods", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 296, "label": "296photograph", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 297, "label": "297model", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 298, "label": "298plastic_art", "shape": "dot", "size": 10}, {"color": "#97c2fc", "id": 299, "label": "299graphic_art", "shape": "dot", "size": 10}]);
+                  edges = new vis.DataSet([{"arrows": "to", "from": 0, "to": 1, "width": 1.0}, {"arrows": "to", "from": 0, "to": 146, "width": 1.0}, {"arrows": "to", "from": 1, "to": 2, "width": 1.0}, {"arrows": "to", "from": 1, "to": 27, "width": 1.0}, {"arrows": "to", "from": 2, "to": 3, "width": 1.0}, {"arrows": "to", "from": 2, "to": 16, "width": 1.0}, {"arrows": "to", "from": 2, "to": 25, "width": 1.0}, {"arrows": "to", "from": 3, "to": 4, "width": 1.0}, {"arrows": "to", "from": 3, "to": 9, "width": 1.0}, {"arrows": "to", "from": 3, "to": 13, "width": 1.0}, {"arrows": "to", "from": 4, "to": 5, "width": 1.0}, {"arrows": "to", "from": 4, "to": 6, "width": 1.0}, {"arrows": "to", "from": 4, "to": 7, "width": 1.0}, {"arrows": "to", "from": 4, "to": 8, "width": 1.0}, {"arrows": "to", "from": 9, "to": 10, "width": 1.0}, {"arrows": "to", "from": 9, "to": 11, "width": 1.0}, {"arrows": "to", "from": 9, "to": 12, "width": 1.0}, {"arrows": "to", "from": 13, "to": 14, "width": 1.0}, {"arrows": "to", "from": 14, "to": 15, "width": 1.0}, {"arrows": "to", "from": 16, "to": 17, "width": 1.0}, {"arrows": "to", "from": 17, "to": 18, "width": 1.0}, {"arrows": "to", "from": 17, "to": 19, "width": 1.0}, {"arrows": "to", "from": 17, "to": 20, "width": 1.0}, {"arrows": "to", "from": 17, "to": 21, "width": 1.0}, {"arrows": "to", "from": 17, "to": 22, "width": 1.0}, {"arrows": "to", "from": 17, "to": 23, "width": 1.0}, {"arrows": "to", "from": 17, "to": 24, "width": 1.0}, {"arrows": "to", "from": 25, "to": 26, "width": 1.0}, {"arrows": "to", "from": 27, "to": 28, "width": 1.0}, {"arrows": "to", "from": 27, "to": 100, "width": 1.0}, {"arrows": "to", "from": 27, "to": 143, "width": 1.0}, {"arrows": "to", "from": 28, "to": 29, "width": 1.0}, {"arrows": "to", "from": 28, "to": 97, "width": 1.0}, {"arrows": "to", "from": 28, "to": 99, "width": 1.0}, {"arrows": "to", "from": 29, "to": 30, "width": 1.0}, {"arrows": "to", "from": 29, "to": 34, "width": 1.0}, {"arrows": "to", "from": 29, "to": 85, "width": 1.0}, {"arrows": "to", "from": 29, "to": 89, "width": 1.0}, {"arrows": "to", "from": 29, "to": 94, "width": 1.0}, {"arrows": "to", "from": 30, "to": 31, "width": 1.0}, {"arrows": "to", "from": 30, "to": 32, "width": 1.0}, {"arrows": "to", "from": 30, "to": 33, "width": 1.0}, {"arrows": "to", "from": 34, "to": 35, "width": 1.0}, {"arrows": "to", "from": 34, "to": 83, "width": 1.0}, {"arrows": "to", "from": 34, "to": 84, "width": 1.0}, {"arrows": "to", "from": 35, "to": 36, "width": 1.0}, {"arrows": "to", "from": 35, "to": 51, "width": 1.0}, {"arrows": "to", "from": 35, "to": 71, "width": 1.0}, {"arrows": "to", "from": 35, "to": 75, "width": 1.0}, {"arrows": "to", "from": 35, "to": 79, "width": 1.0}, {"arrows": "to", "from": 36, "to": 37, "width": 1.0}, {"arrows": "to", "from": 36, "to": 40, "width": 1.0}, {"arrows": "to", "from": 36, "to": 42, "width": 1.0}, {"arrows": "to", "from": 36, "to": 47, "width": 1.0}, {"arrows": "to", "from": 36, "to": 48, "width": 1.0}, {"arrows": "to", "from": 37, "to": 38, "width": 1.0}, {"arrows": "to", "from": 37, "to": 39, "width": 1.0}, {"arrows": "to", "from": 40, "to": 41, "width": 1.0}, {"arrows": "to", "from": 42, "to": 43, "width": 1.0}, {"arrows": "to", "from": 42, "to": 44, "width": 1.0}, {"arrows": "to", "from": 42, "to": 45, "width": 1.0}, {"arrows": "to", "from": 42, "to": 46, "width": 1.0}, {"arrows": "to", "from": 48, "to": 49, "width": 1.0}, {"arrows": "to", "from": 48, "to": 50, "width": 1.0}, {"arrows": "to", "from": 51, "to": 52, "width": 1.0}, {"arrows": "to", "from": 51, "to": 63, "width": 1.0}, {"arrows": "to", "from": 52, "to": 53, "width": 1.0}, {"arrows": "to", "from": 52, "to": 61, "width": 1.0}, {"arrows": "to", "from": 52, "to": 62, "width": 1.0}, {"arrows": "to", "from": 53, "to": 54, "width": 1.0}, {"arrows": "to", "from": 53, "to": 58, "width": 1.0}, {"arrows": "to", "from": 53, "to": 59, "width": 1.0}, {"arrows": "to", "from": 53, "to": 60, "width": 1.0}, {"arrows": "to", "from": 54, "to": 55, "width": 1.0}, {"arrows": "to", "from": 54, "to": 56, "width": 1.0}, {"arrows": "to", "from": 54, "to": 57, "width": 1.0}, {"arrows": "to", "from": 63, "to": 64, "width": 1.0}, {"arrows": "to", "from": 63, "to": 69, "width": 1.0}, {"arrows": "to", "from": 63, "to": 70, "width": 1.0}, {"arrows": "to", "from": 64, "to": 65, "width": 1.0}, {"arrows": "to", "from": 64, "to": 66, "width": 1.0}, {"arrows": "to", "from": 64, "to": 67, "width": 1.0}, {"arrows": "to", "from": 64, "to": 68, "width": 1.0}, {"arrows": "to", "from": 71, "to": 72, "width": 1.0}, {"arrows": "to", "from": 71, "to": 73, "width": 1.0}, {"arrows": "to", "from": 71, "to": 74, "width": 1.0}, {"arrows": "to", "from": 75, "to": 76, "width": 1.0}, {"arrows": "to", "from": 75, "to": 77, "width": 1.0}, {"arrows": "to", "from": 75, "to": 78, "width": 1.0}, {"arrows": "to", "from": 79, "to": 80, "width": 1.0}, {"arrows": "to", "from": 79, "to": 81, "width": 1.0}, {"arrows": "to", "from": 79, "to": 82, "width": 1.0}, {"arrows": "to", "from": 85, "to": 86, "width": 1.0}, {"arrows": "to", "from": 86, "to": 87, "width": 1.0}, {"arrows": "to", "from": 86, "to": 88, "width": 1.0}, {"arrows": "to", "from": 89, "to": 90, "width": 1.0}, {"arrows": "to", "from": 89, "to": 91, "width": 1.0}, {"arrows": "to", "from": 89, "to": 92, "width": 1.0}, {"arrows": "to", "from": 92, "to": 93, "width": 1.0}, {"arrows": "to", "from": 94, "to": 95, "width": 1.0}, {"arrows": "to", "from": 94, "to": 96, "width": 1.0}, {"arrows": "to", "from": 97, "to": 98, "width": 1.0}, {"arrows": "to", "from": 100, "to": 101, "width": 1.0}, {"arrows": "to", "from": 100, "to": 129, "width": 1.0}, {"arrows": "to", "from": 100, "to": 142, "width": 1.0}, {"arrows": "to", "from": 101, "to": 102, "width": 1.0}, {"arrows": "to", "from": 101, "to": 115, "width": 1.0}, {"arrows": "to", "from": 101, "to": 120, "width": 1.0}, {"arrows": "to", "from": 102, "to": 103, "width": 1.0}, {"arrows": "to", "from": 102, "to": 106, "width": 1.0}, {"arrows": "to", "from": 102, "to": 107, "width": 1.0}, {"arrows": "to", "from": 102, "to": 111, "width": 1.0}, {"arrows": "to", "from": 103, "to": 104, "width": 1.0}, {"arrows": "to", "from": 103, "to": 105, "width": 1.0}, {"arrows": "to", "from": 107, "to": 108, "width": 1.0}, {"arrows": "to", "from": 107, "to": 109, "width": 1.0}, {"arrows": "to", "from": 107, "to": 110, "width": 1.0}, {"arrows": "to", "from": 111, "to": 112, "width": 1.0}, {"arrows": "to", "from": 111, "to": 113, "width": 1.0}, {"arrows": "to", "from": 111, "to": 114, "width": 1.0}, {"arrows": "to", "from": 115, "to": 116, "width": 1.0}, {"arrows": "to", "from": 115, "to": 117, "width": 1.0}, {"arrows": "to", "from": 115, "to": 118, "width": 1.0}, {"arrows": "to", "from": 115, "to": 119, "width": 1.0}, {"arrows": "to", "from": 120, "to": 121, "width": 1.0}, {"arrows": "to", "from": 120, "to": 125, "width": 1.0}, {"arrows": "to", "from": 120, "to": 128, "width": 1.0}, {"arrows": "to", "from": 121, "to": 122, "width": 1.0}, {"arrows": "to", "from": 121, "to": 123, "width": 1.0}, {"arrows": "to", "from": 121, "to": 124, "width": 1.0}, {"arrows": "to", "from": 125, "to": 126, "width": 1.0}, {"arrows": "to", "from": 125, "to": 127, "width": 1.0}, {"arrows": "to", "from": 129, "to": 130, "width": 1.0}, {"arrows": "to", "from": 129, "to": 134, "width": 1.0}, {"arrows": "to", "from": 129, "to": 138, "width": 1.0}, {"arrows": "to", "from": 130, "to": 131, "width": 1.0}, {"arrows": "to", "from": 130, "to": 132, "width": 1.0}, {"arrows": "to", "from": 130, "to": 133, "width": 1.0}, {"arrows": "to", "from": 134, "to": 135, "width": 1.0}, {"arrows": "to", "from": 134, "to": 136, "width": 1.0}, {"arrows": "to", "from": 134, "to": 137, "width": 1.0}, {"arrows": "to", "from": 138, "to": 139, "width": 1.0}, {"arrows": "to", "from": 139, "to": 140, "width": 1.0}, {"arrows": "to", "from": 139, "to": 141, "width": 1.0}, {"arrows": "to", "from": 143, "to": 144, "width": 1.0}, {"arrows": "to", "from": 143, "to": 145, "width": 1.0}, {"arrows": "to", "from": 146, "to": 147, "width": 1.0}, {"arrows": "to", "from": 146, "to": 272, "width": 1.0}, {"arrows": "to", "from": 146, "to": 280, "width": 1.0}, {"arrows": "to", "from": 146, "to": 292, "width": 1.0}, {"arrows": "to", "from": 146, "to": 295, "width": 1.0}, {"arrows": "to", "from": 147, "to": 148, "width": 1.0}, {"arrows": "to", "from": 147, "to": 182, "width": 1.0}, {"arrows": "to", "from": 147, "to": 202, "width": 1.0}, {"arrows": "to", "from": 147, "to": 245, "width": 1.0}, {"arrows": "to", "from": 147, "to": 249, "width": 1.0}, {"arrows": "to", "from": 147, "to": 257, "width": 1.0}, {"arrows": "to", "from": 147, "to": 267, "width": 1.0}, {"arrows": "to", "from": 147, "to": 268, "width": 1.0}, {"arrows": "to", "from": 147, "to": 269, "width": 1.0}, {"arrows": "to", "from": 148, "to": 149, "width": 1.0}, {"arrows": "to", "from": 148, "to": 176, "width": 1.0}, {"arrows": "to", "from": 148, "to": 179, "width": 1.0}, {"arrows": "to", "from": 149, "to": 150, "width": 1.0}, {"arrows": "to", "from": 149, "to": 159, "width": 1.0}, {"arrows": "to", "from": 149, "to": 173, "width": 1.0}, {"arrows": "to", "from": 149, "to": 174, "width": 1.0}, {"arrows": "to", "from": 149, "to": 175, "width": 1.0}, {"arrows": "to", "from": 150, "to": 151, "width": 1.0}, {"arrows": "to", "from": 150, "to": 155, "width": 1.0}, {"arrows": "to", "from": 150, "to": 158, "width": 1.0}, {"arrows": "to", "from": 151, "to": 152, "width": 1.0}, {"arrows": "to", "from": 151, "to": 153, "width": 1.0}, {"arrows": "to", "from": 151, "to": 154, "width": 1.0}, {"arrows": "to", "from": 155, "to": 156, "width": 1.0}, {"arrows": "to", "from": 155, "to": 157, "width": 1.0}, {"arrows": "to", "from": 159, "to": 160, "width": 1.0}, {"arrows": "to", "from": 159, "to": 167, "width": 1.0}, {"arrows": "to", "from": 159, "to": 172, "width": 1.0}, {"arrows": "to", "from": 160, "to": 161, "width": 1.0}, {"arrows": "to", "from": 160, "to": 162, "width": 1.0}, {"arrows": "to", "from": 160, "to": 163, "width": 1.0}, {"arrows": "to", "from": 160, "to": 164, "width": 1.0}, {"arrows": "to", "from": 160, "to": 165, "width": 1.0}, {"arrows": "to", "from": 165, "to": 166, "width": 1.0}, {"arrows": "to", "from": 167, "to": 168, "width": 1.0}, {"arrows": "to", "from": 167, "to": 169, "width": 1.0}, {"arrows": "to", "from": 167, "to": 170, "width": 1.0}, {"arrows": "to", "from": 167, "to": 171, "width": 1.0}, {"arrows": "to", "from": 176, "to": 177, "width": 1.0}, {"arrows": "to", "from": 176, "to": 178, "width": 1.0}, {"arrows": "to", "from": 179, "to": 180, "width": 1.0}, {"arrows": "to", "from": 179, "to": 181, "width": 1.0}, {"arrows": "to", "from": 182, "to": 183, "width": 1.0}, {"arrows": "to", "from": 182, "to": 189, "width": 1.0}, {"arrows": "to", "from": 182, "to": 195, "width": 1.0}, {"arrows": "to", "from": 182, "to": 197, "width": 1.0}, {"arrows": "to", "from": 182, "to": 198, "width": 1.0}, {"arrows": "to", "from": 182, "to": 199, "width": 1.0}, {"arrows": "to", "from": 183, "to": 184, "width": 1.0}, {"arrows": "to", "from": 183, "to": 187, "width": 1.0}, {"arrows": "to", "from": 183, "to": 188, "width": 1.0}, {"arrows": "to", "from": 184, "to": 185, "width": 1.0}, {"arrows": "to", "from": 184, "to": 186, "width": 1.0}, {"arrows": "to", "from": 189, "to": 190, "width": 1.0}, {"arrows": "to", "from": 189, "to": 191, "width": 1.0}, {"arrows": "to", "from": 189, "to": 192, "width": 1.0}, {"arrows": "to", "from": 189, "to": 193, "width": 1.0}, {"arrows": "to", "from": 189, "to": 194, "width": 1.0}, {"arrows": "to", "from": 195, "to": 196, "width": 1.0}, {"arrows": "to", "from": 199, "to": 200, "width": 1.0}, {"arrows": "to", "from": 199, "to": 201, "width": 1.0}, {"arrows": "to", "from": 202, "to": 203, "width": 1.0}, {"arrows": "to", "from": 202, "to": 221, "width": 1.0}, {"arrows": "to", "from": 202, "to": 230, "width": 1.0}, {"arrows": "to", "from": 202, "to": 233, "width": 1.0}, {"arrows": "to", "from": 202, "to": 239, "width": 1.0}, {"arrows": "to", "from": 202, "to": 242, "width": 1.0}, {"arrows": "to", "from": 203, "to": 204, "width": 1.0}, {"arrows": "to", "from": 203, "to": 209, "width": 1.0}, {"arrows": "to", "from": 203, "to": 213, "width": 1.0}, {"arrows": "to", "from": 203, "to": 216, "width": 1.0}, {"arrows": "to", "from": 204, "to": 205, "width": 1.0}, {"arrows": "to", "from": 204, "to": 206, "width": 1.0}, {"arrows": "to", "from": 204, "to": 207, "width": 1.0}, {"arrows": "to", "from": 204, "to": 208, "width": 1.0}, {"arrows": "to", "from": 209, "to": 210, "width": 1.0}, {"arrows": "to", "from": 209, "to": 211, "width": 1.0}, {"arrows": "to", "from": 209, "to": 212, "width": 1.0}, {"arrows": "to", "from": 213, "to": 214, "width": 1.0}, {"arrows": "to", "from": 213, "to": 215, "width": 1.0}, {"arrows": "to", "from": 216, "to": 217, "width": 1.0}, {"arrows": "to", "from": 217, "to": 218, "width": 1.0}, {"arrows": "to", "from": 217, "to": 219, "width": 1.0}, {"arrows": "to", "from": 217, "to": 220, "width": 1.0}, {"arrows": "to", "from": 221, "to": 222, "width": 1.0}, {"arrows": "to", "from": 221, "to": 227, "width": 1.0}, {"arrows": "to", "from": 222, "to": 223, "width": 1.0}, {"arrows": "to", "from": 222, "to": 224, "width": 1.0}, {"arrows": "to", "from": 222, "to": 225, "width": 1.0}, {"arrows": "to", "from": 222, "to": 226, "width": 1.0}, {"arrows": "to", "from": 227, "to": 228, "width": 1.0}, {"arrows": "to", "from": 227, "to": 229, "width": 1.0}, {"arrows": "to", "from": 230, "to": 231, "width": 1.0}, {"arrows": "to", "from": 230, "to": 232, "width": 1.0}, {"arrows": "to", "from": 233, "to": 234, "width": 1.0}, {"arrows": "to", "from": 233, "to": 237, "width": 1.0}, {"arrows": "to", "from": 233, "to": 238, "width": 1.0}, {"arrows": "to", "from": 234, "to": 235, "width": 1.0}, {"arrows": "to", "from": 234, "to": 236, "width": 1.0}, {"arrows": "to", "from": 239, "to": 240, "width": 1.0}, {"arrows": "to", "from": 239, "to": 241, "width": 1.0}, {"arrows": "to", "from": 242, "to": 243, "width": 1.0}, {"arrows": "to", "from": 242, "to": 244, "width": 1.0}, {"arrows": "to", "from": 245, "to": 246, "width": 1.0}, {"arrows": "to", "from": 245, "to": 248, "width": 1.0}, {"arrows": "to", "from": 246, "to": 247, "width": 1.0}, {"arrows": "to", "from": 249, "to": 250, "width": 1.0}, {"arrows": "to", "from": 249, "to": 256, "width": 1.0}, {"arrows": "to", "from": 250, "to": 251, "width": 1.0}, {"arrows": "to", "from": 250, "to": 254, "width": 1.0}, {"arrows": "to", "from": 250, "to": 255, "width": 1.0}, {"arrows": "to", "from": 251, "to": 252, "width": 1.0}, {"arrows": "to", "from": 251, "to": 253, "width": 1.0}, {"arrows": "to", "from": 257, "to": 258, "width": 1.0}, {"arrows": "to", "from": 258, "to": 259, "width": 1.0}, {"arrows": "to", "from": 258, "to": 260, "width": 1.0}, {"arrows": "to", "from": 258, "to": 261, "width": 1.0}, {"arrows": "to", "from": 258, "to": 262, "width": 1.0}, {"arrows": "to", "from": 258, "to": 265, "width": 1.0}, {"arrows": "to", "from": 258, "to": 266, "width": 1.0}, {"arrows": "to", "from": 262, "to": 263, "width": 1.0}, {"arrows": "to", "from": 262, "to": 264, "width": 1.0}, {"arrows": "to", "from": 269, "to": 270, "width": 1.0}, {"arrows": "to", "from": 269, "to": 271, "width": 1.0}, {"arrows": "to", "from": 272, "to": 273, "width": 1.0}, {"arrows": "to", "from": 272, "to": 279, "width": 1.0}, {"arrows": "to", "from": 273, "to": 274, "width": 1.0}, {"arrows": "to", "from": 273, "to": 275, "width": 1.0}, {"arrows": "to", "from": 273, "to": 276, "width": 1.0}, {"arrows": "to", "from": 273, "to": 277, "width": 1.0}, {"arrows": "to", "from": 273, "to": 278, "width": 1.0}, {"arrows": "to", "from": 280, "to": 281, "width": 1.0}, {"arrows": "to", "from": 280, "to": 289, "width": 1.0}, {"arrows": "to", "from": 281, "to": 282, "width": 1.0}, {"arrows": "to", "from": 281, "to": 287, "width": 1.0}, {"arrows": "to", "from": 281, "to": 288, "width": 1.0}, {"arrows": "to", "from": 282, "to": 283, "width": 1.0}, {"arrows": "to", "from": 282, "to": 284, "width": 1.0}, {"arrows": "to", "from": 282, "to": 285, "width": 1.0}, {"arrows": "to", "from": 282, "to": 286, "width": 1.0}, {"arrows": "to", "from": 289, "to": 290, "width": 1.0}, {"arrows": "to", "from": 289, "to": 291, "width": 1.0}, {"arrows": "to", "from": 292, "to": 293, "width": 1.0}, {"arrows": "to", "from": 292, "to": 294, "width": 1.0}, {"arrows": "to", "from": 295, "to": 296, "width": 1.0}, {"arrows": "to", "from": 295, "to": 297, "width": 1.0}, {"arrows": "to", "from": 295, "to": 298, "width": 1.0}, {"arrows": "to", "from": 295, "to": 299, "width": 1.0}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {
+    "configure": {
+        "enabled": false
+    },
+    "edges": {
+        "color": {
+            "inherit": true
+        },
+        "smooth": {
+            "enabled": true,
+            "type": "dynamic"
+        }
+    },
+    "interaction": {
+        "dragNodes": true,
+        "hideEdgesOnDrag": false,
+        "hideNodesOnDrag": false
+    },
+    "layout": {
+        "hierarchical": {
+            "blockShifting": true,
+            "edgeMinimization": true,
+            "enabled": true,
+            "levelSeparation": 150,
+            "parentCentralization": true,
+            "sortMethod": "hubsize",
+            "treeSpacing": 200
+        },
+        "improvedLayout": true,
+        "randomSeed": 0
+    },
+    "physics": {
+        "enabled": true,
+        "stabilization": {
+            "enabled": true,
+            "fit": true,
+            "iterations": 1000,
+            "onlyDynamicEdges": false,
+            "updateInterval": 50
+        }
+    }
+};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+                      network.on("stabilizationProgress", function(params) {
+                          document.getElementById('loadingBar').removeAttribute("style");
+                          var maxWidth = 496;
+                          var minWidth = 20;
+                          var widthFactor = params.iterations/params.total;
+                          var width = Math.max(minWidth,maxWidth * widthFactor);
+                          document.getElementById('bar').style.width = width + 'px';
+                          document.getElementById('text').innerHTML = Math.round(widthFactor*100) + '%';
+                      });
+                      network.once("stabilizationIterationsDone", function() {
+                          document.getElementById('text').innerHTML = '100%';
+                          document.getElementById('bar').style.width = '496px';
+                          document.getElementById('loadingBar').style.opacity = 0;
+                          // really clean the dom element
+                          setTimeout(function () {document.getElementById('loadingBar').style.display = 'none';}, 500);
+                      });
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

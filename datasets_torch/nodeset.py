@@ -21,6 +21,7 @@ class NodeSet(Dataset):
         self.id_to_imgs = []
         self.id_to_children = []
         self.id_to_text = []
+        self.   id_to_img_tensors = []
         self._id = 0
         self.root = root
         self.img_root = img_root
@@ -45,7 +46,7 @@ class NodeSet(Dataset):
     def raw_files(self):
         return ['middle_handcrafted.json']
 
-    def _process(self):
+    def _process(self, save_img_pt=False, clip=None):
         if self.check_whether_processed():
             d = torch.load(osp.join(self.root, self.processed_files[0]))
             # a graph containing label taxonomy which is used for sampling path during training
@@ -55,6 +56,7 @@ class NodeSet(Dataset):
             self.id_to_children = d['id_to_children']  # list
             self.id_to_imgs = d['id_to_imgs']  # list
             self.id_to_text = d['id_to_text']  # list
+            self.id_to_img_tensors = d['id_to_img_tensors']
             return
         else:
             raw = json.load(open(osp.join(self.root, self.raw_files[0])))
@@ -89,26 +91,55 @@ class NodeSet(Dataset):
 
             _traverse_tree(raw)
             self.raw_graph = raw
+            if clip is not None and save_img_pt:
+                for _id, imgs in enumerate(self.id_to_imgs):
+                    if len(imgs) > 0:
+                        text = self.tokenize(self.id_to_text[_id], truncate=True)
+                        imgs = torch.cat(batch_load_img(imgs, self.transform, 200))
+                        with torch.no_grad():
+                            text_embedding = clip.encode_text(text.to(clip.device)).cpu()
+                            imgs_embedding = clip.encode_image(imgs.to(clip.device)).cpu()
+                        cat_ = torch.cat([text_embedding, imgs_embedding])
+                        self.id_to_img_tensors.append(cat_)
+                    else:
+                        text = self.tokenize(self.id_to_text[_id], truncate=True)
+                        with torch.no_grad():
+                            text_embedding = clip.encode_text(text.to(clip.device)).cpu()
+                        self.id_to_img_tensors.append(text_embedding)
             torch.save({'raw_graph': self.raw_graph, 'id_to_imgs': self.id_to_imgs, 'id_to_text': self.id_to_text,
                         'id_to_name': self.id_to_name, 'id_to_children': self.id_to_children,
-                        'name_to_id': self.name_to_id}, osp.join(self.root, self.processed_files[0]))
+                        'name_to_id': self.name_to_id, 'id_to_img_tensors': self.id_to_img_tensors}, osp.join(self.root, self.processed_files[0]))
 
     def __len__(self):
         return len(self.id_to_name)
 
     def __getitem__(self, idx):
-        t_des = self.tokenize(self.id_to_text[idx], truncate=True)
+        # t_des = self.tokenize(self.id_to_text[idx], truncate=True)
+        #
+        # def getimgs(_i):
+        #     if len(self.id_to_imgs[_i]) == 0:
+        #         res = []
+        #         for c in self.id_to_children[_i]:
+        #             res += getimgs(c)
+        #         return res
+        #     else:
+        #         return self.id_to_imgs[_i]
+        #
+        # imgs_ = getimgs(idx)
+        # inputs = batch_load_img(imgs_, self.transform, self.max_imgs_per_node)
+        # return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)
 
-        def getimgs(_i):
+        text_embed = self.id_to_img_tensors[idx][0]
+        def get_leaves(_i):
             if len(self.id_to_imgs[_i]) == 0:
                 res = []
                 for c in self.id_to_children[_i]:
-                    res += getimgs(c)
+                    res += get_leaves(c)
                 return res
             else:
-                return self.id_to_imgs[_i]
+                return self.id_to_img_tensors[_i][1:, ]
+        descendants = torch.cat(get_leaves(idx))
+        imgs_embed = random.choices(descendants, k=self.max_imgs_per_node)
 
-        imgs_ = getimgs(idx)
-        inputs = batch_load_img(imgs_, self.transform, self.max_imgs_per_node)
+        return idx, self.id_to_name[idx], text_embed, imgs_embed
 
-        return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)

@@ -79,3 +79,64 @@ class NodeEncoder(torch.nn.Module):
         out = self.activation(self.project_box(fused_embed[:, 0, :]))
 
         return out
+
+
+class vlTransformer(torch.nn.Module):
+    def __init__(self, reduced_dims):
+        super(vlTransformer, self).__init__()
+        self.project_box = torch.nn.Sequential(
+            torch.nn.Linear(512, 256, dtype=torch.float32),
+            torch.nn.Linear(256, reduced_dims, dtype=torch.float32)
+        )
+        self.fusion_module = Transformer(
+            width=512,
+            layers=6,
+            heads=8,
+            attn_mask=self.build_attention_mask()
+        )
+        self.activation = torch.nn.Sigmoid()
+        self.type_embedding = torch.nn.Embedding(2, 512)
+        self.to(torch.float32)
+        self.init_params()
+
+    def init_params(self):
+        proj_std = (self.fusion_module.width ** -0.5) * ((2 * self.fusion_module.layers) ** -0.5)
+        attn_std = self.fusion_module.width ** -0.5
+        fc_std = (2 * self.fusion_module.width) ** -0.5
+        for block in self.fusion_module.resblocks:
+            torch.nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+            torch.nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            torch.nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            torch.nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+
+    def build_attention_mask(self):
+        # lazily create causal attention mask, with full attention between the vision tokens
+        # pytorch uses additive attention mask; fill with -inf
+        mask = torch.empty(51, 51)
+        mask.fill_(float("-inf"))
+        mask.triu_(1)  # zero out the lower diagonal
+        return mask
+
+    def forward(self, text_embedding, img_features):
+        t = text_embedding + self.type_embedding(torch.Tensor([1]).to(torch.int).to(text_embedding.device))
+        i = img_features + self.type_embedding(torch.Tensor([0]).to(torch.int).to(img_features.device))
+
+        cat_embed = torch.cat([t, i], dim=1)
+        x = cat_embed
+        x = x.permute(1, 0, 2)
+        fused_embed = self.fusion_module(x)
+        fused_embed = fused_embed.permute(1, 0, 2)
+        out = self.activation(self.project_box(fused_embed[:, 0, :]))
+
+        return out
+
+
+class twinTransformer(torch.nn.Module):
+    def __init__(self, reduced_dims):
+        super(twinTransformer, self).__init__()
+
+        self.pos_transformer = vlTransformer(reduced_dims)
+        self.neg_transformer = vlTransformer(reduced_dims)
+
+    def forward(self, text_embedding, image_features):
+        pass

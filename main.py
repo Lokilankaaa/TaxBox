@@ -108,8 +108,8 @@ def main():
     dataset = NodeSet('/data/home10b/xw/visualCon/datasets_json/',
                       '/data/home10b/xw/visualCon/handcrafted',
                       prep, clip.tokenize)
-    # vis_graph(get_adj_matrix(dataset.id_to_children), dataset.id_to_name)
-    train(model, dataset, optimizer, device)
+    vis_graph(get_adj_matrix(dataset.id_to_children), dataset.id_to_name)
+    # train(model, dataset, optimizer, device)
     # model.load_state_dict(torch.load('model.pth'))
     # __test(dataset, model)
 

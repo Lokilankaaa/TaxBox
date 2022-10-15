@@ -9,6 +9,7 @@ import os
 from PIL import Image
 import numpy as np
 from utils.utils import batch_load_img
+import clip
 
 
 class NodeSet(Dataset):
@@ -21,7 +22,9 @@ class NodeSet(Dataset):
         self.id_to_imgs = []
         self.id_to_children = []
         self.id_to_text = []
-        self.   id_to_img_tensors = []
+        self.id_to_img_tensors = []
+        self.id_to_father = []
+        self.leaves = []
         self._id = 0
         self.root = root
         self.img_root = img_root
@@ -46,7 +49,7 @@ class NodeSet(Dataset):
     def raw_files(self):
         return ['middle_handcrafted.json']
 
-    def _process(self, save_img_pt=False, clip=None):
+    def _process(self, save_img_pt=True):
         if self.check_whether_processed():
             d = torch.load(osp.join(self.root, self.processed_files[0]))
             # a graph containing label taxonomy which is used for sampling path during training
@@ -57,13 +60,16 @@ class NodeSet(Dataset):
             self.id_to_imgs = d['id_to_imgs']  # list
             self.id_to_text = d['id_to_text']  # list
             self.id_to_img_tensors = d['id_to_img_tensors']
+            self.id_to_father = d['id_to_father']
+            self.leaves = d['leaves']
             return
         else:
             raw = json.load(open(osp.join(self.root, self.raw_files[0])))
 
-            def _traverse_tree(head):
+            def _traverse_tree(head, father):
                 assert len(self.id_to_name) == self._id and len(self.id_to_children) == self._id and \
-                       len(self.id_to_text) == self._id and len(self.id_to_imgs) == self._id
+                       len(self.id_to_text) == self._id and len(self.id_to_imgs) == self._id and len(
+                    self.id_to_father) == self._id
                 if len(head['children']) == 0:
                     head['id'] = self._id
                     self.name_to_id[head['name']] = self._id
@@ -73,6 +79,8 @@ class NodeSet(Dataset):
                     self.id_to_children.append([])
                     self.id_to_imgs.append([osp.join(osp.join(self.img_root, head['name'], f)) for f in
                                             os.listdir(osp.join(self.img_root, head['name']))])
+                    self.id_to_father.append(father)
+                    self.leaves.append(self._id)
                     self._id += 1
                 else:
                     head['id'] = self._id
@@ -81,34 +89,38 @@ class NodeSet(Dataset):
                     self.id_to_text.append(head['name'] + ',' + head['description'])
                     self.id_to_imgs.append([])
                     self.id_to_children.append([])
+                    self.id_to_father.append(father)
                     self._id += 1
                     for i, child in enumerate(head['children']):
-                        _traverse_tree(child)
+                        _traverse_tree(child, head['id'])
                     self.id_to_children[head['id']] = [i['id'] for i in head['children']]
 
                 del head['name']
                 del head['description']
 
-            _traverse_tree(raw)
+            _traverse_tree(raw, -1)
             self.raw_graph = raw
-            if clip is not None and save_img_pt:
+            if save_img_pt:
+                _clip, preprocess = clip.load('ViT-B/32')
                 for _id, imgs in enumerate(self.id_to_imgs):
                     if len(imgs) > 0:
                         text = self.tokenize(self.id_to_text[_id], truncate=True)
                         imgs = torch.cat(batch_load_img(imgs, self.transform, 200))
                         with torch.no_grad():
-                            text_embedding = clip.encode_text(text.to(clip.device)).cpu()
-                            imgs_embedding = clip.encode_image(imgs.to(clip.device)).cpu()
+                            text_embedding = _clip.encode_text(text.cuda()).cpu()
+                            imgs_embedding = _clip.encode_image(imgs.cuda()).cpu()
                         cat_ = torch.cat([text_embedding, imgs_embedding])
                         self.id_to_img_tensors.append(cat_)
                     else:
                         text = self.tokenize(self.id_to_text[_id], truncate=True)
                         with torch.no_grad():
-                            text_embedding = clip.encode_text(text.to(clip.device)).cpu()
+                            text_embedding = _clip.encode_text(text.cuda()).cpu()
                         self.id_to_img_tensors.append(text_embedding)
             torch.save({'raw_graph': self.raw_graph, 'id_to_imgs': self.id_to_imgs, 'id_to_text': self.id_to_text,
                         'id_to_name': self.id_to_name, 'id_to_children': self.id_to_children,
-                        'name_to_id': self.name_to_id, 'id_to_img_tensors': self.id_to_img_tensors}, osp.join(self.root, self.processed_files[0]))
+                        'name_to_id': self.name_to_id, 'id_to_img_tensors': self.id_to_img_tensors,
+                        'id_to_father': self.id_to_father, 'leaves': self.leaves},
+                       osp.join(self.root, self.processed_files[0]))
 
     def __len__(self):
         return len(self.id_to_name)
@@ -130,6 +142,7 @@ class NodeSet(Dataset):
         # return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)
 
         text_embed = self.id_to_img_tensors[idx][0]
+
         def get_leaves(_i):
             if len(self.id_to_imgs[_i]) == 0:
                 res = []
@@ -138,8 +151,12 @@ class NodeSet(Dataset):
                 return res
             else:
                 return self.id_to_img_tensors[_i][1:, ]
+
         descendants = torch.cat(get_leaves(idx))
-        imgs_embed = random.choices(descendants, k=self.max_imgs_per_node)
+        imgs_embed = random.sample(descendants, k=self.max_imgs_per_node)
 
         return idx, self.id_to_name[idx], text_embed, imgs_embed
 
+
+if __name__ == "__main__":
+    pass

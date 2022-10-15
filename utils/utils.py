@@ -9,12 +9,14 @@ import numpy as np
 import clip
 import random
 import torch.nn.functional as F
+import multiprocessing as mp
+from itertools import combinations
 
 EPS = 1e-13
 
 
 def batch_load_img(imgs_, transform, max_k=50):
-    imgs = random.choices(imgs_, k=max_k) if len(imgs_) > max_k else imgs_
+    imgs = random.sample(imgs_, k=max_k) if len(imgs_) > max_k else imgs_
     inputs = []
     while len(imgs) != 0:
         i = imgs[0]
@@ -57,6 +59,49 @@ def checkpoint(path_to_save, model):
     else:
         sd = model.state_dict()
     torch.save(sd, path_to_save)
+
+
+def id_to_ascendants(_id, id_to_father):
+    path = [_id]
+    head = _id
+    while id_to_father[head] != -1:
+        path.insert(0, id_to_father[head])
+        head = id_to_father[head]
+    path.insert(0, 0)
+    return path
+
+
+# -1: node1 under node2, 1: node2 under node1, 0: neg
+def check_pos_neg(node1, node2, id_to_father):
+    assert node1 != node2
+    p1 = id_to_ascendants(node1, id_to_father)
+    p2 = id_to_ascendants(node2, id_to_father)
+    if node2 in p1:
+        return -1
+    if node1 in p2:
+        return 1
+    return 0
+
+
+def sample_n_nodes(k):
+    N = 300
+    res = random.sample(range(1, N), k=k)
+    return res
+
+
+# n^2 / 2
+def check_pairwise_pos_neg(node_lists, id_to_father):
+    num_workers = 8
+    ma = torch.zeros((len(node_lists), len(node_lists)))
+    combs = list(combinations(node_lists, 2))
+    if len(combs) < num_workers:
+        for c in combs:
+            res = check_pos_neg(c[0], c[1], id_to_father)
+            if res == -1:
+                ma[node_lists.index(c[1]), node_lists.index(c[0])] = 1
+            elif res == 1:
+                ma[node_lists.index(c[0]), node_lists.index(c[1])] = 1
+
 
 
 def sample_pair(path, relation='descendant'):

@@ -89,7 +89,7 @@ def _insert_node(graph_box_embeddings, dataset, model, novel_node):
 
 def test_on_insert(dataset, model, path_to_json):
     test_nodes = json.load(open(path_to_json))
-    graph_box_embeddings = get_graph_box_embedding(dataset, model, False, False)
+    graph_box_embeddings = get_graph_box_embedding(dataset, model, 128, False, False)
     print(random.choice(graph_box_embeddings))
     img_path = '/data/home10b/xw/visualCon/test_handcrafted/'
     for node in test_nodes:

@@ -96,10 +96,11 @@ class vlTransformer(torch.nn.Module):
         )
         self.activation = torch.nn.Sigmoid()
         self.type_embedding = torch.nn.Embedding(2, 512)
-        self.to(torch.float32)
-        self.init_params()
 
-    def init_params(self):
+        self.init_params()
+        self.to(torch.float32)
+
+    def init_params(self, init_clip=False):
         proj_std = (self.fusion_module.width ** -0.5) * ((2 * self.fusion_module.layers) ** -0.5)
         attn_std = self.fusion_module.width ** -0.5
         fc_std = (2 * self.fusion_module.width) ** -0.5
@@ -109,10 +110,16 @@ class vlTransformer(torch.nn.Module):
             torch.nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
             torch.nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
 
+        if init_clip:
+            _clip, _ = clip.load('ViT-B/32')
+            for m, c in zip(self.fusion_module.parameters(), _clip.transformer.parameters()):
+                m.data = c.data
+            del _clip
+
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
-        mask = torch.empty(51, 51)
+        mask = torch.empty(101, 101)
         mask.fill_(float("-inf"))
         mask.triu_(1)  # zero out the lower diagonal
         return mask
@@ -134,9 +141,25 @@ class vlTransformer(torch.nn.Module):
 class twinTransformer(torch.nn.Module):
     def __init__(self, reduced_dims):
         super(twinTransformer, self).__init__()
+        self.box_dim = reduced_dims
+        self.query_transformer = vlTransformer(reduced_dims)
+        self.key_transformer = vlTransformer(reduced_dims)
+        self._init_params()
 
-        self.pos_transformer = vlTransformer(reduced_dims)
-        self.neg_transformer = vlTransformer(reduced_dims)
+    @torch.no_grad()
+    def _update_momentum_encoder(self, m):
+        for q, k in zip(self.query_transformer.parameters(), self.key_transformer.parameters()):
+            k.data = k.data * m + (1. - m) * q.data
 
-    def forward(self, text_embedding, image_features):
-        pass
+    def _init_params(self):
+        for param_q, param_k in zip(self.query_transformer.parameters(), self.key_transformer.parameters()):
+            param_k.data.copy_(param_q.data)  # initialize
+            param_k.requires_grad = False  # not update by gradient
+
+    def forward(self, text_embedding, image_features, m):
+        q = self.query_transformer(text_embedding, image_features)
+        with torch.no_grad():
+            self._update_momentum_encoder(m)
+            k = self.key_transformer(text_embedding, image_features)
+
+        return q, k

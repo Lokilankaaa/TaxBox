@@ -13,9 +13,7 @@ import clip
 
 
 class NodeSet(Dataset):
-    def __init__(self, root, img_root, img_transform, text_tokenize, max_imgs_per_node=50, train_mask=None):
-        self.transform = img_transform
-        self.tokenize = text_tokenize
+    def __init__(self, root, img_root, max_imgs_per_node=100, train_mask=None):
         self.raw_graph = None
         self.name_to_id = {}
         self.id_to_name = []
@@ -141,19 +139,19 @@ class NodeSet(Dataset):
         # inputs = batch_load_img(imgs_, self.transform, self.max_imgs_per_node)
         # return idx, self.id_to_name[idx], t_des, torch.cat(inputs, dim=1)
 
-        text_embed = self.id_to_img_tensors[idx][0]
+        text_embed = self.id_to_img_tensors[idx][0].unsqueeze(0)
 
         def get_leaves(_i):
-            if len(self.id_to_imgs[_i]) == 0:
+            if self.id_to_img_tensors[_i].shape[0] == 1:
                 res = []
                 for c in self.id_to_children[_i]:
-                    res += get_leaves(c)
-                return res
+                    res.append(get_leaves(c))
+                return torch.cat(res)
             else:
                 return self.id_to_img_tensors[_i][1:, ]
 
-        descendants = torch.cat(get_leaves(idx))
-        imgs_embed = random.sample(descendants, k=self.max_imgs_per_node)
+        descendants = get_leaves(idx)
+        imgs_embed = descendants[random.sample(range(descendants.shape[0]), k=self.max_imgs_per_node)].unsqueeze(0)
 
         return idx, self.id_to_name[idx], text_embed, imgs_embed
 

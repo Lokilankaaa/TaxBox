@@ -11,8 +11,15 @@ import random
 import torch.nn.functional as F
 import multiprocessing as mp
 from itertools import combinations
+import math
 
 EPS = 1e-13
+
+
+def adjust_moco_momentum(epoch, m, total_epochs):
+    """Adjust moco momentum based on current epoch"""
+    m = 1. - 0.5 * (1. + math.cos(math.pi * epoch / total_epochs)) * (1. - m)
+    return
 
 
 def batch_load_img(imgs_, transform, max_k=50):
@@ -28,7 +35,7 @@ def batch_load_img(imgs_, transform, max_k=50):
     return inputs
 
 
-def get_graph_box_embedding(dataset, model, save=True, load=True):
+def get_graph_box_embedding(dataset, model, dims, save=True, load=True):
     if load and os.path.exists('embeddings.npy'):
         embeddings = np.load('embeddings.npy')
         return embeddings
@@ -45,7 +52,7 @@ def get_graph_box_embedding(dataset, model, save=True, load=True):
             out = model(t, i)
             embeddings.append(out.cpu().numpy())
 
-    embeddings = np.array(embeddings).reshape(-1, 256)
+    embeddings = np.array(embeddings).reshape(-1, dims)
     if save:
         np.save('embeddings.npy', embeddings)
 
@@ -73,7 +80,8 @@ def id_to_ascendants(_id, id_to_father):
 
 # -1: node1 under node2, 1: node2 under node1, 0: neg
 def check_pos_neg(node1, node2, id_to_father):
-    assert node1 != node2
+    if node1 == node2:
+        return 2
     p1 = id_to_ascendants(node1, id_to_father)
     p2 = id_to_ascendants(node2, id_to_father)
     if node2 in p1:
@@ -83,25 +91,56 @@ def check_pos_neg(node1, node2, id_to_father):
     return 0
 
 
-def sample_n_nodes(k):
-    N = 300
-    res = random.sample(range(1, N), k=k)
-    return res
-
-
 # n^2 / 2
 def check_pairwise_pos_neg(node_lists, id_to_father):
     num_workers = 8
-    ma = torch.zeros((len(node_lists), len(node_lists)))
+    size_list = len(node_lists)
+    ma = [0] * size_list * size_list
     combs = list(combinations(node_lists, 2))
-    if len(combs) < num_workers:
-        for c in combs:
+
+    def check_comb(cs, m):
+        for c in cs:
             res = check_pos_neg(c[0], c[1], id_to_father)
             if res == -1:
-                ma[node_lists.index(c[1]), node_lists.index(c[0])] = 1
+                m[node_lists.index(c[1]) * size_list + node_lists.index(c[0])] = 1
             elif res == 1:
-                ma[node_lists.index(c[0]), node_lists.index(c[1])] = 1
+                m[node_lists.index(c[0]) * size_list + node_lists.index(c[1])] = 1
+            elif res == 2:
+                m[node_lists.index(c[0]) * size_list + node_lists.index(c[1])] = 1
+                m[node_lists.index(c[1]) * size_list + node_lists.index(c[0])] = 1
 
+    if len(combs) < 100 * num_workers:
+        check_comb(combs, ma)
+    else:
+        ma = mp.Array('i', ma)
+        combs = torch.Tensor(combs).chunk(num_workers, 0)
+        pool = [mp.Process(target=check_comb, args=(c.to(torch.int).numpy().tolist(), ma)) for c in combs]
+        list([p.start() for p in pool])
+        list([p.join() for p in pool])
+
+    return ma
+
+
+def sample_n_nodes(k, id_to_father):
+    N = 300
+    res = random.sample(range(1, N), k=k//2)
+    fs = []
+    for r in res:
+        if id_to_father[r] != -1:
+            a = r
+            while id_to_father[r] in res or id_to_father[r] in fs:
+                r = id_to_father[r]
+            if id_to_father[r] != -1:
+                fs.append(id_to_father[r])
+            else:
+                fs.append(0)
+        else:
+            fs.append(0)
+    res += fs
+    ma = check_pairwise_pos_neg(res, id_to_father)
+    ma = np.array(ma).reshape((len(res), -1))
+    np.fill_diagonal(ma, 1)
+    return res, ma
 
 
 def sample_pair(path, relation='descendant'):

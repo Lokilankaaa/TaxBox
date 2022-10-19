@@ -82,7 +82,7 @@ class NodeEncoder(torch.nn.Module):
 
 
 class vlTransformer(torch.nn.Module):
-    def __init__(self, reduced_dims):
+    def __init__(self, reduced_dims, seq_len):
         super(vlTransformer, self).__init__()
         self.project_box = torch.nn.Sequential(
             torch.nn.Linear(512, 256, dtype=torch.float32),
@@ -92,7 +92,7 @@ class vlTransformer(torch.nn.Module):
             width=512,
             layers=6,
             heads=8,
-            attn_mask=self.build_attention_mask()
+            attn_mask=self.build_attention_mask(seq_len)
         )
         self.activation = torch.nn.Sigmoid()
         self.type_embedding = torch.nn.Embedding(2, 512)
@@ -116,10 +116,10 @@ class vlTransformer(torch.nn.Module):
                 m.data = c.data
             del _clip
 
-    def build_attention_mask(self):
+    def build_attention_mask(self, seq_len):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
-        mask = torch.empty(101, 101)
+        mask = torch.empty(seq_len, seq_len)
         mask.fill_(float("-inf"))
         mask.triu_(1)  # zero out the lower diagonal
         return mask
@@ -139,11 +139,11 @@ class vlTransformer(torch.nn.Module):
 
 
 class twinTransformer(torch.nn.Module):
-    def __init__(self, reduced_dims):
+    def __init__(self, reduced_dims, seq_len):
         super(twinTransformer, self).__init__()
         self.box_dim = reduced_dims
-        self.query_transformer = vlTransformer(reduced_dims)
-        self.key_transformer = vlTransformer(reduced_dims)
+        self.query_transformer = vlTransformer(reduced_dims, seq_len)
+        self.key_transformer = vlTransformer(reduced_dims, seq_len)
         self._init_params()
 
     @torch.no_grad()

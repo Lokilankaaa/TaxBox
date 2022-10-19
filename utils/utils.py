@@ -19,8 +19,7 @@ EPS = 1e-13
 def adjust_moco_momentum(epoch, m, total_epochs):
     """Adjust moco momentum based on current epoch"""
     m = 1. - 0.5 * (1. + math.cos(math.pi * epoch / total_epochs)) * (1. - m)
-    return
-
+    return m
 
 def batch_load_img(imgs_, transform, max_k=50):
     imgs = random.sample(imgs_, k=max_k) if len(imgs_) > max_k else imgs_
@@ -35,12 +34,12 @@ def batch_load_img(imgs_, transform, max_k=50):
     return inputs
 
 
-def get_graph_box_embedding(dataset, model, dims, save=True, load=True):
-    if load and os.path.exists('embeddings.npy'):
-        embeddings = np.load('embeddings.npy')
-        return embeddings
+def get_graph_box_embedding(dataset, model, dims, save=False, load=False):
+    if load and os.path.exists('k_embeddings.npy'):
+        k_embeddings = np.load('k_embeddings.npy')
+        return k_embeddings
 
-    embeddings = []
+    k_embeddings = []
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model.to(device)
     for d in dataset:
@@ -49,14 +48,14 @@ def get_graph_box_embedding(dataset, model, dims, save=True, load=True):
         i = i.to(device)
         model.eval()
         with torch.no_grad():
-            out = model(t, i)
-            embeddings.append(out.cpu().numpy())
+            k_out = model.key_transformer(t, i)
+            k_embeddings.append(k_out.cpu().numpy())
 
-    embeddings = np.array(embeddings).reshape(-1, dims)
+    k_embeddings = np.array(k_embeddings).reshape(-1, dims)
     if save:
-        np.save('embeddings.npy', embeddings)
+        np.save('k_embeddings.npy', k_embeddings)
 
-    return embeddings
+    return k_embeddings
 
 
 def checkpoint(path_to_save, model):
@@ -93,7 +92,7 @@ def check_pos_neg(node1, node2, id_to_father):
 
 # n^2 / 2
 def check_pairwise_pos_neg(node_lists, id_to_father):
-    num_workers = 8
+    num_workers = 24
     size_list = len(node_lists)
     ma = [0] * size_list * size_list
     combs = list(combinations(node_lists, 2))
@@ -109,7 +108,7 @@ def check_pairwise_pos_neg(node_lists, id_to_father):
                 m[node_lists.index(c[0]) * size_list + node_lists.index(c[1])] = 1
                 m[node_lists.index(c[1]) * size_list + node_lists.index(c[0])] = 1
 
-    if len(combs) < 100 * num_workers:
+    if len(combs) < 20 * num_workers:
         check_comb(combs, ma)
     else:
         ma = mp.Array('i', ma)
@@ -123,7 +122,7 @@ def check_pairwise_pos_neg(node_lists, id_to_father):
 
 def sample_n_nodes(k, id_to_father):
     N = 300
-    res = random.sample(range(1, N), k=k//2)
+    res = random.sample(range(1, N), k=k // 2)
     fs = []
     for r in res:
         if id_to_father[r] != -1:
@@ -253,7 +252,7 @@ def softplus(x, t):
     return F.softplus(x, t)
 
 
-def soft_volume(x: torch.Tensor, t=1, box_mode=False):
+def soft_volume(x: torch.Tensor, t=0.5, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     assert x.dim() == 2
@@ -319,7 +318,7 @@ def gumbel_intersection(x, y, beta=1, box_mode=False):
 
 
 # log p(x|y)
-def log_conditional_prob(x, y, box_mode=False):
+def log_conditional_prob(x, y, box_mode=True):
     inter = hard_intersection(x, y, box_mode=box_mode)
     log_prob = (torch.log(soft_volume(inter, box_mode=box_mode)) - torch.log(soft_volume(y, box_mode=box_mode))).sum(
         -1).clamp(max=-EPS)
@@ -328,7 +327,7 @@ def log_conditional_prob(x, y, box_mode=False):
 
 
 # p(x | y)
-def conditional_prob(x, y, box_mode=False):
+def conditional_prob(x, y, box_mode=True):
     return (soft_volume(hard_intersection(x, y, box_mode=box_mode), box_mode=box_mode) / soft_volume(y,
                                                                                                      box_mode=box_mode)).prod(
         -1).clamp(min=EPS)

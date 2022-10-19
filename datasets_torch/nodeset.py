@@ -13,7 +13,7 @@ import clip
 
 
 class NodeSet(Dataset):
-    def __init__(self, root, img_root, max_imgs_per_node=100, train_mask=None):
+    def __init__(self, root, img_root, max_imgs_per_node=150, train_mask=None):
         self.raw_graph = None
         self.name_to_id = {}
         self.id_to_name = []
@@ -151,9 +151,12 @@ class NodeSet(Dataset):
                 return self.id_to_img_tensors[_i][1:, ]
 
         descendants = get_leaves(idx)
-        imgs_embed = descendants[random.sample(range(descendants.shape[0]), k=self.max_imgs_per_node)].unsqueeze(0)
+        imgs_embed = descendants[
+            random.sample(range(descendants.shape[0]), k=self.max_imgs_per_node if descendants.shape[
+                                                                                       0] > self.max_imgs_per_node else
+            descendants.shape[0])].unsqueeze(0)
 
-        return idx, self.id_to_name[idx], text_embed, imgs_embed
+        return idx, self.id_to_name[idx], text_embed.unsqueeze(0), imgs_embed
 
 
 if __name__ == "__main__":

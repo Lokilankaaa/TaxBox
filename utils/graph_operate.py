@@ -7,28 +7,31 @@ from .utils import retrieve_model, extract_features_for_imgs, log_conditional_pr
     get_graph_box_embedding, batch_load_img
 from datasets_torch.handcrafted import encode_description
 import numpy as np
+import clip
 
 
-def _insert_node(graph_box_embeddings, dataset, model, novel_node):
+def _insert_node(k_embeddings, dataset, model, novel_node, clip_model, trans):
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model.to(device)
     des, img_paths = novel_node
-    e_des = dataset.tokenize(des, truncate=True).to(device)
-    imgs = batch_load_img(img_paths, dataset.transform, max_k=dataset.max_imgs_per_node)
-    imgs = torch.cat(imgs, dim=1).to(device)
-    novel_embed = model(e_des, imgs)
+    e_des = clip.tokenize(des, truncate=True).to(device)
+    imgs = batch_load_img(img_paths, trans, max_k=dataset.max_imgs_per_node)
+    imgs = torch.cat(imgs).to(device)
+    e_des = clip_model.encode_text(e_des).unsqueeze(0)
+    imgs = clip_model.encode_image(imgs).unsqueeze(0)
+    novel_embed = model.query_transformer(e_des, imgs)
 
     head = dataset.raw_graph
-    threshold = 0.5
-    while len(head['children']) == 0:
+    threshold = 0.1
+    while len(head['children']) > 0:
         max_prob_novel_in_c = -1
         max_prob_c_in_novel = -1
         choose_child = None
         choose_father = None
         for c in head['children']:
-            c_embed = graph_box_embeddings[c['id']]
-            prob_c_in_novel = torch.exp(log_conditional_prob(novel_embed.unsqueeze(0), c_embed.unsqueeze(0)))
-            prob_novel_in_c = torch.exp(log_conditional_prob(c_embed.unsqueeze(0), novel_embed.unsqueeze(0)))
+            c_embed = k_embeddings[c['id']]
+            prob_c_in_novel = conditional_prob(novel_embed, torch.from_numpy(c_embed).unsqueeze(0).to(device))
+            prob_novel_in_c = conditional_prob(torch.from_numpy(c_embed).unsqueeze(0).to(device), novel_embed)
             if prob_novel_in_c > prob_c_in_novel:
                 if prob_novel_in_c > max_prob_novel_in_c and prob_novel_in_c > threshold:
                     max_prob_novel_in_c = prob_novel_in_c
@@ -37,12 +40,16 @@ def _insert_node(graph_box_embeddings, dataset, model, novel_node):
                 if prob_c_in_novel > max_prob_c_in_novel and prob_c_in_novel > threshold:
                     max_prob_c_in_novel = prob_c_in_novel
                     choose_father = c
-        if max_prob_c_in_novel < max_prob_novel_in_c:
+
+        if choose_father is None and choose_child is None:
+            print('{} is son of {}'.format(des.split(',')[0], dataset.id_to_name[head['id']]))
+            break
+        elif max_prob_c_in_novel < max_prob_novel_in_c:
             head = choose_child
         else:
             print('{} is father of {}'.format(des.split(',')[0], dataset.id_to_name[choose_father['id']]))
             break
-    if len(head['children']) > 0:
+    if len(head['children']) == 0:
         print('{} is son of {}'.format(des.split(',')[0], dataset.id_to_name[head['id']]))
 
 
@@ -87,15 +94,15 @@ def _insert_node(graph_box_embeddings, dataset, model, novel_node):
 #         print('{} is sibling of {}'.format(novel_node_des[0], cur_name))
 
 
-def test_on_insert(dataset, model, path_to_json):
+def test_on_insert(dataset, model, path_to_json, box_dim):
     test_nodes = json.load(open(path_to_json))
-    graph_box_embeddings = get_graph_box_embedding(dataset, model, 128, False, False)
-    print(random.choice(graph_box_embeddings))
+    c, p = clip.load('ViT-B/32')
+    k_embeddings = get_graph_box_embedding(dataset, model, box_dim, False, False)
     img_path = '/data/home10b/xw/visualCon/test_handcrafted/'
     for node in test_nodes:
         des = node['name'] + ',' + node['description']
         img_lists = [os.path.join(img_path, node['name'], i) for i in os.listdir(os.path.join(img_path, node['name']))]
-        _insert_node(graph_box_embeddings, dataset, model, (des, img_lists))
+        _insert_node(k_embeddings, dataset, model, (des, img_lists), c, p)
 
 
 # def test_on_insert(path_to_json, raw_graph, graph_embeddings, model):

@@ -52,7 +52,15 @@ def triplet_loss(pairs, batch):
 import math
 
 
-def contrastive_loss(q, k, connect_m, batch):
+def regularization_loss(q):
+    qz, qZ = q.chunk(2, -1)
+    abnormal = qZ - qz
+    abnormal = abnormal[abnormal <= 0]
+    return abnormal.abs().mean(-1).mean()
+
+
+def contrastive_loss(q, k, connect_m, batch, regular=False):
+    # model as a multilabel question
     # b * box_dim, b * box_dim, b * b
     loss = []
     test_prob = 0
@@ -76,5 +84,8 @@ def contrastive_loss(q, k, connect_m, batch):
             n_prob2 = conditional_prob(k[n], _sample)
             _loss.append((-torch.log(1 - n_prob1) - torch.log(1 - n_prob2)) / 2)
         loss.append(torch.cat(_loss).mean().unsqueeze(0))
+    loss = torch.cat(loss).mean()
+    if regular:
+        loss += regularization_loss(q)
 
-    return torch.cat(loss).mean(), test_prob
+    return loss, test_prob

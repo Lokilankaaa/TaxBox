@@ -3,7 +3,7 @@ import math
 import tqdm
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 from datasets_torch.handcrafted import Handcrafted
 from datasets_torch.nodeset import NodeSet
@@ -20,26 +20,34 @@ from tensorboardX import SummaryWriter
 import clip
 import random
 import numpy as np
+import argparse
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--box_dim", type=int, default=128)
+parser.add_argument("--regularization_loss", type=bool, default=True)
+parser.add_argument("--gpu_id", type=str, default='0,1')
+parser.add_argument("--saved_model_path", type=str, default='model.pth')
+parser.add_argument("--lr", type=float, default=1e-3)
+parser.add_argument("--max_imgs_per_node", type=int, default=100)
 
 def get_dataset(root, dataset):
     return Handcrafted(root)
 
 
-def prepare(model_name='', lr=0.001, step_size=5, gamma=0.1, parallel=True):
+def prepare(args, step_size=5, gamma=0.1, parallel=True):
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
-    model = twinTransformer(128)
+    model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
     # prep = model.preprocess
     model.to(device)
-    optimizer = torch.optim.Adam(params=model.query_transformer.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(params=model.query_transformer.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
     if parallel:
         model = torch.nn.parallel.DataParallel(model)
     return model, optimizer, scheduler, device
 
 
-def train(model, dataset, optimizer, device):
+def train(model, dataset, optimizer, device, args):
     writer = SummaryWriter(comment='NodeEncoder')
     model.train()
     sample_nums = 50
@@ -66,11 +74,11 @@ def train(model, dataset, optimizer, device):
                 _id, _name, _text, _imgs = inputs
                 text = _text if len(text) == 0 else torch.cat([text, _text])
                 img = _imgs if len(img) == 0 else torch.cat([img, _imgs])
-            text = text.unsqueeze(1).to(device)
+            text = text.to(device)
             img = img.to(device)
             q, k = model(text, img, adjust_moco_momentum(e, 0.99, 20))
 
-            loss, pos_n = contrastive_loss(q, k, con_m, batch)
+            loss, pos_n = contrastive_loss(q, k, con_m, batch, args.regularization_loss)
             # pe += loss.item()
             # pp += p
             # pn += n
@@ -93,26 +101,28 @@ def train(model, dataset, optimizer, device):
             loss.backward()
             optimizer.step()
         # __test(dataset, model)
-        checkpoint('model.pth', model)
+        checkpoint(args.saved_model_path, model)
     writer.close()
     # test_on_insert('/data/home10b/xw/visualCon/datasets_json/saved_handcrafted_test.json', data.raw_graph, model(data),
     #                model)
 
 
 def __test(dataset, model):
-    test_on_insert(dataset, model, 'datasets_json/saved_handcrafted_test.json')
+    test_on_insert(dataset, model, 'datasets_json/saved_handcrafted_test.json', args.box_dim)
 
 
-def main():
+def main(args):
     # dataset = get_dataset('/data/home10b/xw/visualCon/datasets_json/handcrafted')
-    model, optimizer, scheduler, device = prepare(parallel=True)
+    model, optimizer, scheduler, device = prepare(args, parallel=False)
     dataset = NodeSet('/data/home10b/xw/visualCon/datasets_json/',
-                      '/data/home10b/xw/visualCon/handcrafted')
+                      '/data/home10b/xw/visualCon/handcrafted', max_imgs_per_node=args.max_imgs_per_node)
     # vis_graph(get_adj_matrix(dataset.id_to_children), dataset.id_to_name)
-    train(model, dataset, optimizer, device)
-    # model.load_state_dict(torch.load('model.pth'))
+    train(model, dataset, optimizer, device, args)
+    # model.load_state_dict(torch.load('m1.pth'))
     # __test(dataset, model)
 
 
 if __name__ == '__main__':
-    main()
+    args = parser.parse_args()
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
+    main(args)

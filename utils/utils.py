@@ -261,7 +261,7 @@ def soft_volume(x: torch.Tensor, t=0.5, box_mode=False):
         box_length = Z - z
     else:
         box_length = Z * 2
-    return softplus(box_length, 1 / t).clamp(min=EPS)
+    return softplus(box_length, 1 / t)
 
 
 def bessel_approx_volume(x, t=1, box_mode=False):

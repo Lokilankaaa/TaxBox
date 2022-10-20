@@ -22,7 +22,7 @@ def _insert_node(k_embeddings, dataset, model, novel_node, clip_model, trans):
     novel_embed = model.query_transformer(e_des, imgs)
 
     head = dataset.raw_graph
-    threshold = 0.1
+    threshold = 0.5
     while len(head['children']) > 0:
         max_prob_novel_in_c = -1
         max_prob_c_in_novel = -1
@@ -96,6 +96,7 @@ def _insert_node(k_embeddings, dataset, model, novel_node, clip_model, trans):
 
 def test_on_insert(dataset, model, path_to_json, box_dim):
     test_nodes = json.load(open(path_to_json))
+    # print(test_nodes)
     c, p = clip.load('ViT-B/32')
     k_embeddings = get_graph_box_embedding(dataset, model, box_dim, False, False)
     img_path = '/data/home10b/xw/visualCon/test_handcrafted/'

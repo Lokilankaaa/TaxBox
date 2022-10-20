@@ -52,10 +52,18 @@ def triplet_loss(pairs, batch):
 import math
 
 
+# def volume_pen(q):
+#     vq = soft_volume(q, box_mode=True).prod(-1)
+#     res = (vq - 1e-8)
+#     return (res[res < 0]).abs().mean()
+
+
 def regularization_loss(q):
     qz, qZ = q.chunk(2, -1)
     abnormal = qZ - qz
     abnormal = abnormal[abnormal <= 0]
+    if abnormal.sum() == 0:
+        return 0
     return abnormal.abs().mean(-1).mean()
 
 
@@ -64,6 +72,7 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     # b * box_dim, b * box_dim, b * b
     loss = []
     test_prob = 0
+    count = 0
     for i, _sample in enumerate(q):
         _loss = []
         pos_son = np.where(connect_m[i] == 1)[0]
@@ -72,11 +81,13 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
         for s in pos_son:
             _loss.append(- log_conditional_prob(_sample, k[s]))
             if batch[i] != batch[s]:
-                test_prob = conditional_prob(_sample, k[s])
+                test_prob += conditional_prob(_sample, k[s])
+                count += 1
         for f in pos_fa:
             _loss.append(- log_conditional_prob(k[f], _sample))
             if batch[i] != batch[f]:
-                test_prob = conditional_prob(k[f], _sample)
+                test_prob += conditional_prob(k[f], _sample)
+                count += 1
         for n in neg:
             if batch[i] == batch[n]:
                 continue
@@ -87,5 +98,7 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     loss = torch.cat(loss).mean()
     if regular:
         loss += regularization_loss(q)
-
-    return loss, test_prob
+    # if math.isinf(loss.item()) or math.isnan(loss.item()):
+    # print(batch)
+    # print(q[0])
+    return loss, test_prob / count

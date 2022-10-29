@@ -155,6 +155,10 @@ class NodeSet(Dataset):
             random.sample(range(descendants.shape[0]), k=self.max_imgs_per_node if descendants.shape[
                                                                                        0] > self.max_imgs_per_node else
             descendants.shape[0])].unsqueeze(0)
+        # if self.id_to_img_tensors[idx].shape[0] > 1:
+        #     sampled_num = self.max_imgs_per_node
+        # else:
+        #     descendants.shape[0] =
 
         return idx, self.id_to_name[idx], text_embed.unsqueeze(0), imgs_embed
 

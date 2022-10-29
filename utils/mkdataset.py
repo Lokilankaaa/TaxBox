@@ -9,6 +9,117 @@ import wikipedia
 from nltk.corpus import wordnet as wn
 import queue
 import pprint
+import networkx as nx
+from pyvis.network import Network
+from queue import Queue
+
+
+def extract_tree_from_imagenet(word_path, imagenet_path, save=True):
+    tree = json.load(open(word_path))
+
+    imagenet_labels = [l.lower().replace(' ', '_') for l in os.listdir(imagenet_path)]
+    contained = []
+
+    def dfs(head):
+        flag = False
+        if head['name'] in imagenet_labels and head['name'] not in contained:
+            flag = True
+            contained.append(head['name'])
+
+        if len(head['children']) == 0:
+            return flag
+        else:
+            lazy_del = []
+            random.shuffle(head['children'])
+            for c in head['children']:
+                res = dfs(c)
+                if not res:
+                    lazy_del.append(c)
+                flag = flag or res
+            for c in lazy_del:
+                head['children'].remove(c)
+            return flag
+
+    dfs(tree)
+    print(len(contained))
+    if save:
+        with open(word_path.replace('wordnet', 'imagenet'), 'w') as f:
+            json.dump(tree, f)
+
+    return tree
+
+
+def split_tree_dataset(whole_tree_path, split=0.8):
+    tree = json.load(open(whole_tree_path))
+    _id = [0]
+    edge = []
+    descriptions = []
+    names = []
+
+    def dfs(head):
+        if len(head['children']) == 0:
+            head['id'] = _id[0]
+            _id[0] += 1
+        else:
+            head['id'] = _id[0]
+            _id[0] += 1
+            for i, child in enumerate(head['children']):
+                dfs(child)
+            list([edge.append([head['id'], c['id']]) for c in head['children']])
+
+    def bfs(tree):
+        tree['id'] = _id[0]
+        _id[0] += 1
+        q = Queue()
+        q.put(tree)
+        while not q.empty():
+            head = q.get()
+            names.append(head['name'])
+            descriptions.append(head['definition'])
+
+            for c in head['children']:
+                c['id'] = _id[0]
+                _id[0] += 1
+                edge.append([head['id'], c['id']])
+                q.put(c)
+
+    def reconstruct():
+        for node in test_eval:
+            children = G.successors(node)
+            father = list(G.predecessors(node))[0]
+            G.remove_node(node)
+            for c in children:
+                G.add_edge(father, c)
+
+    bfs(tree)
+
+    G = nx.DiGraph()
+    G.add_edges_from(edge)
+
+    start_id = count_n_level_id(G, 6)
+
+    test_eval = random.sample(range(start_id, _id[0]), k=int((_id[0] - start_id) * (1 - split)))
+    train = list(range(_id[0]))
+    list(map(lambda x: train.remove(x), test_eval))
+    test, eva = test_eval[:len(test_eval) // 2], test_eval[len(test_eval) // 2:]
+
+    reconstruct()
+
+    return G, names, descriptions, train, test, eva
+
+
+def count_n_level_id(G, n):
+    levels = [[0]]
+    for i in range(n):
+        fathers = levels[i]
+        levels.append([])
+        for f in fathers:
+            levels[i + 1] += list(G.successors(f))
+
+    res = []
+    for l in levels:
+        res += l
+    return max(res) + 1
 
 
 def mk_label_map():
@@ -159,18 +270,25 @@ def sample_subset_from_wordnet(wordnet_json_root):
     wordnet = json.load(open(wordnet_json_root))
 
 
-def construct_tree_to_dict(tree):
+def construct_tree_to_dict(tree, unique=False):
     d = {}
 
-    def dfs(head):
-        d[head['name']] = head
+    def dfs(head, unique):
+        if unique:
+            if head['name'] in d.keys():
+                d[head['name'] + '#' + str(random.randint(0, 99))] = head
+            else:
+                d[head['name']] = head
+        else:
+            d[head['name']] = head
+
         if len(head['children']) == 0:
             return
         else:
             for c in head['children']:
-                dfs(c)
+                dfs(c, unique)
 
-    dfs(tree)
+    dfs(tree, unique)
     return d
 
 
@@ -252,4 +370,13 @@ if __name__ == '__main__':
     # word_count = json.load(open('wordnet_count.json'))
     # word_tree = json.load(open('wordnet_dataset.json'))
     # pruned = word_tree_pruner(word_tree)
-    interactive_json_maker()
+    # interactive_json_maker()
+    # t = extract_tree_from_imagenet('/data/home10b/xw/visualCon/datasets_json/wordnet_dataset.json',
+    #                                '/data/home10b/xw/imagenet21k/imagenet_images')
+    # dt = construct_tree_to_dict(t, unique=True)
+    # imagenet_labels = [l.lower().replace(' ', '_') for l in os.listdir('/data/home10b/xw/imagenet21k/imagenet_images')]
+
+    # con = [k for k, _ in dt.items() if k in imagenet_labels]
+    # print(len(con), con)
+    # print(len(dt))
+    split_tree_dataset('/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')

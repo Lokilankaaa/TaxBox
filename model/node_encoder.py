@@ -100,7 +100,7 @@ class vlTransformer(torch.nn.Module):
         self.init_params()
         self.to(torch.float32)
 
-    def init_params(self, init_clip=False):
+    def init_params(self, init_clip=True):
         proj_std = (self.fusion_module.width ** -0.5) * ((2 * self.fusion_module.layers) ** -0.5)
         attn_std = self.fusion_module.width ** -0.5
         fc_std = (2 * self.fusion_module.width) ** -0.5

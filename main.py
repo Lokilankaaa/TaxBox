@@ -29,6 +29,7 @@ parser.add_argument("--gpu_id", type=str, default='0,1')
 parser.add_argument("--saved_model_path", type=str, default='model.pth')
 parser.add_argument("--lr", type=float, default=1e-4)
 parser.add_argument("--max_imgs_per_node", type=int, default=100)
+parser.add_argument("--sample_nums", type=int, default=50)
 parser.add_argument("--train", action="store_true")
 parser.add_argument("--test", action="store_true")
 parser.add_argument("--vis_graph", action="store_true")
@@ -38,7 +39,7 @@ def get_dataset(root, dataset):
     return Handcrafted(root)
 
 
-def prepare(args, step_size=600, gamma=0.2, parallel=True):
+def prepare(args, step_size=400, gamma=0.5, parallel=True):
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
     model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
@@ -54,7 +55,7 @@ def prepare(args, step_size=600, gamma=0.2, parallel=True):
 def train(model, dataset, optimizer, scheduler, device, args):
     writer = SummaryWriter(comment='NodeEncoder')
     model.train()
-    sample_nums = 50
+    sample_nums = args.sample_nums
     total_iters = 0
     for e in range(20):
         pe, pp, pn = 0, 0, 0
@@ -107,7 +108,8 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 optimizer.step()
             else:
                 return
-            scheduler.step()
+            if scheduler.get_lr()[0] > 1e-8:
+                scheduler.step()
         # __test(dataset, model)
         checkpoint(args.saved_model_path, model)
     writer.close()

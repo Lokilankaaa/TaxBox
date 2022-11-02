@@ -98,7 +98,7 @@ def split_tree_dataset(whole_tree_path, split=0.8):
 
     start_id = count_n_level_id(G, 6)
 
-    test_eval = random.sample(range(start_id, _id[0]), k=int((_id[0] - start_id) * (1 - split)))
+    test_eval = random.sample(range(start_id, _id[0]), k=int(_id[0] * (1 - split)))
     train = list(range(_id[0]))
     list(map(lambda x: train.remove(x), test_eval))
     test, eva = test_eval[:len(test_eval) // 2], test_eval[len(test_eval) // 2:]
@@ -379,4 +379,6 @@ if __name__ == '__main__':
     # con = [k for k, _ in dt.items() if k in imagenet_labels]
     # print(len(con), con)
     # print(len(dt))
-    split_tree_dataset('/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
+    G, names, descriptions, train, test, eva = split_tree_dataset('/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
+    from datasets_torch.treeset import TreeSet
+    t = TreeSet(G, names, descriptions)

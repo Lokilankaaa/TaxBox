@@ -166,11 +166,32 @@ class TreeSet(Dataset):
     def distance(self, a, b):
         return nx.shortest_path_length(self._undigraph, a, b)
 
+    def path_sim(self, a, b):
+        common = nx.lowest_common_ancestor(a, b)
+        common_path = nx.shortest_path(self._tree, 0, common)
+        return len(common_path) / (len(common_path) + self.distance(a, b))
+
     def path_between(self, a, b):
         return nx.shortest_path(self._undigraph, a, b)
 
     def __getitem__(self, idx):
-        pass
+        l = []
+        for _ in self.fetch_order:
+            l += _
+
+        g = l[idx]
+        node_feature_list = []
+        old_to_new_label_lookup = {}
+        new_to_old_label_lookup = {}
+        for i, node in enumerate(g.nodes()):
+            old_to_new_label_lookup[node] = i
+            new_to_old_label_lookup[i] = node
+            node_feature_list.append(self._database[node])
+        new_g = nx.relabel_nodes(g, old_to_new_label_lookup)
+
+        # old: label in original tree, new: range from 0 to len(g)
+        # new_g and node_feature_list are one-to-one
+        return new_g, node_feature_list, old_to_new_label_lookup, new_to_old_label_lookup
 
 
 if __name__ == "__main__":
@@ -178,4 +199,4 @@ if __name__ == "__main__":
 
     G, names, descriptions, train, test, eva = split_tree_dataset(
         '/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
-    t = TreeSet(G, names, descriptions)
+    t = TreeSet(G, names, descriptions, batch_size=200)

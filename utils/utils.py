@@ -436,6 +436,7 @@ def retrieve_model(model_name, device):
     return _model if model_name != 'clip' else _model.encode_image, _preprocess
 
 
+
 if __name__ == '__main__':
     # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     # model, preprocess = retrieve_model('resnet50', device)

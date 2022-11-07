@@ -1,9 +1,12 @@
 import random
 import torch
+from copy import deepcopy
+
 from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_prob
 from .utils import sample_path, sample_pair
 import numpy as np
 import torch.nn.functional as F
+from .graph_operate import transitive_closure_maj
 
 
 # def contrastive_loss(x, num_path, num_samples, raw_graph, margin=2000):
@@ -68,7 +71,6 @@ def regularization_loss(q):
 
 
 def contrastive_loss(q, k, connect_m, batch, regular=False):
-    # model as a multilabel question
     # b * box_dim, b * box_dim, b * b
     loss = []
     test_prob = 0
@@ -102,3 +104,37 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     # print(batch)
     # print(q[0])
     return loss, test_prob / count
+
+
+def adaptive_BCE(pair_nodes, b_boxes, tree, sim_F, new_to_old_label_lookup):
+    trans_clo_maj = transitive_closure_maj(tree)
+    for query, boxes in zip(pair_nodes, b_boxes):
+        query_box = boxes[0]
+        key_boxs = boxes[1:, ]
+
+        def pair_loss(_idx):
+            key_box = key_boxs[_idx]
+            sim = sim_F(new_to_old_label_lookup[query], new_to_old_label_lookup[_idx])
+
+            loss = 0
+            # k in q
+            if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 1:
+                loss += - log_conditional_prob(query_box, key_box, True)
+            # q in k
+            if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 1:
+                loss += - log_conditional_prob(key_box, query_box, True)
+
+            # k not in q
+            if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 0:
+                prob = conditional_prob(query_box, key_box, True)
+                loss += - sim * torch.log(1 - prob)
+
+            # q not in k
+            if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 0:
+                prob = conditional_prob(key_box, query_box, True)
+                loss += - sim * torch.log(1 - prob)
+
+            return loss
+
+
+

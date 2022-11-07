@@ -9,7 +9,7 @@ from datasets_torch.handcrafted import Handcrafted
 from datasets_torch.nodeset import NodeSet
 import torch
 from model.visgnn import GCN
-from model.node_encoder import NodeEncoder, twinTransformer
+from model.node_encoder import NodeEncoder, twinTransformer, MultimodalNodeEncoder
 import configparser
 from utils.loss import triplet_loss, contrastive_loss
 import logging
@@ -42,10 +42,11 @@ def get_dataset(root, dataset):
 def prepare(args, step_size=400, gamma=0.5, parallel=True):
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
-    model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
+    # model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
+    model = MultimodalNodeEncoder()
     # prep = model.preprocess
     model.to(device)
-    optimizer = torch.optim.Adam(params=model.query_transformer.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
     if parallel:
         model = torch.nn.parallel.DataParallel(model)
@@ -81,7 +82,7 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 img = _imgs if len(img) == 0 else torch.cat([img, _imgs])
             text = text.to(device)
             img = img.to(device)
-            q, k = model(text, img, adjust_moco_momentum(e, 0.99, 20))
+            q, k = model(text, img)
 
             loss, pos_n = contrastive_loss(q, k, con_m, batch, args.regularization_loss)
             # pe += loss.item()

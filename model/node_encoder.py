@@ -1,9 +1,12 @@
 import torch
 import clip
 import torch.nn.functional as F
+from copy import deepcopy
 from torch_geometric.nn import GATv2Conv
 import numpy as np
 from .module import Transformer
+from transformers import ViltModel, ViltConfig, BertConfig, BertModel
+from utils.graph_operate import transitive_closure_maj
 
 
 class NodeEncoder(torch.nn.Module):
@@ -163,3 +166,92 @@ class twinTransformer(torch.nn.Module):
             k = self.key_transformer(text_embedding, image_features)
 
         return q, k
+
+
+class MultimodalNodeEncoder(torch.nn.Module):
+    def __init__(self, hidden_size):
+        super(MultimodalNodeEncoder, self).__init__()
+        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64)
+        self.vilt = ViltModel(self.config)
+        self.cls_token = torch.nn.Parameter((torch.zeros(1, 1, 512)))
+
+    def forward(self, text_embeds, imgs_embeds):
+        cls_token = self.cls_token.expand(text_embeds.shape[0], -1, -1)
+        img_masks = torch.ones((text_embeds.shape[0], 1, imgs_embeds.shape[1] + 1)).to(text_embeds.device)
+        text_embeds = torch.cat([cls_token, text_embeds], dim=1)
+        imgs_embeds = torch.cat([cls_token, imgs_embeds], dim=1)
+        res = self.vilt(inputs_embeds=text_embeds, image_embeds=imgs_embeds, return_dict=True,
+                        pixel_mask=img_masks)
+        return res['pooler_output']
+
+
+class StructuralFusionModule(torch.nn.Module):
+    def __init__(self, hidden_size):
+        super(StructuralFusionModule, self).__init__()
+        self.cfg = BertConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64,
+                              num_hidden_layers=3)
+        self.fusion = BertModel(self.cfg)
+
+    def forward(self, node_feature_list, node_tree):
+        # generate matching tree
+        # node_feature_list: n * feature_dim
+        attention_mask = []
+        batch_nodes = []
+        pair_node = []
+        for n in node_tree.nodes():
+            _c_tree = deepcopy(node_tree)
+            _c_tree.remove_node(n)
+            selected_tree_nodes = torch.cat(
+                [node_feature_list[:n, ], [node_feature_list[n + 1:, :]]])
+            maj = transitive_closure_maj(_c_tree)  # (n-1) * (n-1)
+            attention_mask.append(self.generate_mask(maj))
+            batch_nodes.append(selected_tree_nodes)
+            pair_node.append(n)
+
+        batch_nodes = torch.cat(batch_nodes)
+        # attention_mask shape: n * n * n
+        attention_mask = torch.cat(torch.Tensor(attention_mask).to(batch_nodes.device))
+
+        res = self.fusion(input_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+        fused = torch.cat([node_feature_list[pair_node], res['last_hidden_state']])
+        return pair_node, fused  # fused: sep node and other nodes
+        # fused shape: n * n * feature_dim
+
+
+class BoxDecoder(torch.nn.Module):
+    def __init__(self, box_dim, hidden_size):
+        super(BoxDecoder, self).__init__()
+        self.box_dim = box_dim
+        self.project_box = torch.nn.Sequential(
+            torch.nn.Linear(hidden_size, hidden_size // 2, dtype=torch.float32),
+            torch.nn.Linear(hidden_size // 2, self.box_dim, dtype=torch.float32)
+        )
+        self.act = torch.nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.project_box(x)
+        x = self.act(x)
+
+        return x
+
+
+class TreeKiller(torch.nn.Module):
+    def __init__(self, box_dim, hidden_size):
+        super(TreeKiller, self).__init__()
+        self.box_decoder = BoxDecoder(box_dim, hidden_size)
+        self.node_encoder = MultimodalNodeEncoder(hidden_size)
+        self.struct_encoder = StructuralFusionModule(hidden_size)
+
+    def forward(self, node_feature_list, tree):
+        node_features = self.node_encoder(node_feature_list)
+
+        # noted that the first index of fused_features is not fused
+        pair_node, fused_features = self.struct_encoder(node_features, tree)
+
+        boxes = self.box_decoder(fused_features)
+
+        return pair_node, boxes
+
+
+if __name__ == "__main__":
+    pass

@@ -8,6 +8,7 @@ from .utils import retrieve_model, extract_features_for_imgs, log_conditional_pr
 from datasets_torch.handcrafted import encode_description
 import numpy as np
 import clip
+import networkx as nx
 
 
 def _insert_node(k_embeddings, dataset, model, novel_node, clip_model, trans):
@@ -114,6 +115,7 @@ def test_on_insert(dataset, model, path_to_json, box_dim):
 #         _insert_node(raw_graph, graph_embeddings, model, (k, des), img_lists)
 #
 
+
 def test_entailment(raw_graph, graph_embeddings):
     head_name = 'object'
     head = raw_graph[head_name]
@@ -121,3 +123,8 @@ def test_entailment(raw_graph, graph_embeddings):
         for child in head['children']:
             cur_name = list(child.keys())[0]
             prob = conditional_prob(graph_embeddings[head['id']], graph_embeddings[cur_name['id']])
+
+
+def transitive_closure_maj(g):
+    trans_c = nx.transitive_closure(g, reflexive=True)
+    return nx.adjacency_matrix(trans_c)

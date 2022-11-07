@@ -14,7 +14,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--input_dataset", type=str)
 parser.add_argument("-s", "--save_middle", type=str)
-parser.add_argument("-o", "--out_dir", type=str, default='/data/home10b/xw/visualCon/test_handcrafted')
+parser.add_argument("-o", "--out_dir", type=str, default='/data/home10b/xw/imagenet21k/imagenet_images')
 parser.add_argument("-n", "--num_workers", type=int, default=30)
 args = parser.parse_args()
 
@@ -35,7 +35,12 @@ datas = json.load(open(args.input_dataset))
 saved = {}
 
 def request_link(head):
-    text = head['name'].replace('_', ' ') + ',' + head['description']
+    if head['name'].replace('_', ' ') in os.listdir(args.out_dir):
+        print('pass {}'.format(head['name']))
+        return
+    else:
+        print('starting {}'.format(head['name']))
+    text = head['name'].replace('_', ' ') + ',' + head['definition']
     data_raw['text'] = text
     while True:
         try:
@@ -53,11 +58,13 @@ def request_link(head):
             time.sleep(60)
 
 def get_links(head):
+    request_link(head)
     if len(head['children']) == 0:
-        request_link(head)
+        return
     else:
         for c in head['children']:
             get_links(c)
+
 
 
 def get_list_links(l):
@@ -66,7 +73,7 @@ def get_list_links(l):
         request_link(ll)
 
 
-get_list_links(datas)
+get_links(datas)
 # with mp.Pool(num_workers) as p:
 #     p.map(get_list_links, name_to_pointer_list)
 #

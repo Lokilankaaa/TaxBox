@@ -12,8 +12,13 @@ from utils.utils import batch_load_img
 
 
 class TreeSet(Dataset):
-    def __init__(self, G, names, descriptions, batch_size=300):
+    def __init__(self, whole, G, names, descriptions, train, eva, test, batch_size=250):
         super(TreeSet, self).__init__()
+        self.mode = 'train'
+        self.whole = whole
+        self.train = train
+        self.eva = eva
+        self.test = test
         self._tree = G
         self._undigraph = G.to_undirected()
         self._c_tree = deepcopy(self._tree)
@@ -37,8 +42,14 @@ class TreeSet(Dataset):
         self._process()
         self.shuffle()
 
-    def _get_leaves(self):
-        self.leaves = list([node for node in self._tree.nodes.keys() if self._tree.out_degree(node) == 0])
+    def update_box(self, i, embed):
+        self.box_embeddings[i] = embed
+
+    def _get_leaves(self, t=None):
+        if t is None:
+            self.leaves = list([node for node in self._tree.nodes.keys() if self._tree.out_degree(node) == 0])
+        else:
+            return list([node for node in t.nodes.keys() if t.out_degree(node) == 0])
 
     def _get_all_paths(self):
         for l in self.leaves:
@@ -136,21 +147,24 @@ class TreeSet(Dataset):
             m, prep = clip.load('ViT-B/32')
 
             img_path = '/data/home10b/xw/imagenet21k/imagenet_images'
-            for n in self._tree.nodes():
-                name = self.names[n].replace('_', ' ')
+            for n in self.whole.nodes():
+                name = self.names[n]
                 description = self.descriptions[n]
-                text = clip.tokenize(','.join([name, description]), truncate=True)
-                if self._tree.out_degree(n) == 0:
-                    imgs = [os.path.join(img_path, name, i) for i in os.listdir(os.path.join(img_path, name))]
-                    imgs = torch.cat(batch_load_img(imgs, prep, 100))
-                    with torch.no_grad():
-                        text_embedding = m.encode_text(text.cuda()).cpu()
-                        imgs_embedding = m.encode_image(imgs.cuda()).cpu()
-                    cat_ = torch.cat([text_embedding, imgs_embedding])
-                else:
-                    with torch.no_grad():
-                        text_embedding = m.encode_text(text.cuda()).cpu()
-                    cat_ = text_embedding
+                text = clip.tokenize(','.join([name.replace('_', ' '), description]), truncate=True)
+
+                if name in os.listdir(img_path):
+                    name = name
+                elif name.replace('_', ' ') in os.listdir(img_path):
+                    name = name.replace('_', ' ')
+                elif name + '#' + description in os.listdir(img_path):
+                    name = (name + '#' + description)
+
+                imgs = [os.path.join(img_path, name, i) for i in os.listdir(os.path.join(img_path, name))]
+                imgs = torch.cat(batch_load_img(imgs, prep, 100))
+                with torch.no_grad():
+                    text_embedding = m.encode_text(text.cuda()).cpu()
+                    imgs_embedding = m.encode_image(imgs.cuda()).cpu()
+                cat_ = torch.cat([text_embedding, imgs_embedding])
 
                 self._database[n] = cat_
             torch.save(self._database, 'tree_data.pt')
@@ -168,18 +182,30 @@ class TreeSet(Dataset):
 
     def path_sim(self, a, b):
         common = nx.lowest_common_ancestor(a, b)
-        common_path = nx.shortest_path(self._tree, 0, common)
-        return len(common_path) / (len(common_path) + self.distance(a, b))
+        common_path = self.distance(0, common)
+        return common_path / (common_path + self.distance(a, b))
 
     def path_between(self, a, b):
         return nx.shortest_path(self._undigraph, a, b)
 
+    def change_mode(self, mode):
+        assert mode in ('train', 'test', 'eva')
+        self.mode = mode
+
     def __getitem__(self, idx):
+        if self.mode == 'eva':
+            return self._database[self.eva[idx]], list(
+                [n for n in nx.shortest_path(self.whole, self.eva[idx], 0) if n in self.train])
+        if self.mode == 'test':
+            return self._database[self.test[idx]], list(
+                [n for n in nx.shortest_path(self.whole, self.test[idx], 0) if n in self.train])
+
         l = []
         for _ in self.fetch_order:
             l += _
 
         g = l[idx]
+        leaves = self._get_leaves(g)
         node_feature_list = []
         old_to_new_label_lookup = {}
         new_to_old_label_lookup = {}
@@ -188,10 +214,12 @@ class TreeSet(Dataset):
             new_to_old_label_lookup[i] = node
             node_feature_list.append(self._database[node])
         new_g = nx.relabel_nodes(g, old_to_new_label_lookup)
+        leaves_embeds = dict(
+            (old_to_new_label_lookup[k], self.box_embeddings[k]) for k in leaves if k in self.box_embeddings.keys())
 
         # old: label in original tree, new: range from 0 to len(g)
         # new_g and node_feature_list are one-to-one
-        return new_g, node_feature_list, old_to_new_label_lookup, new_to_old_label_lookup
+        return new_g, torch.cat(node_feature_list), leaves_embeds, old_to_new_label_lookup, new_to_old_label_lookup
 
 
 if __name__ == "__main__":

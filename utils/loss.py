@@ -108,6 +108,7 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
 
 def adaptive_BCE(pair_nodes, b_boxes, tree, sim_F, new_to_old_label_lookup):
     trans_clo_maj = transitive_closure_maj(tree)
+    loss = 0
     for query, boxes in zip(pair_nodes, b_boxes):
         query_box = boxes[0]
         key_boxs = boxes[1:, ]
@@ -116,25 +117,28 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, sim_F, new_to_old_label_lookup):
             key_box = key_boxs[_idx]
             sim = sim_F(new_to_old_label_lookup[query], new_to_old_label_lookup[_idx])
 
-            loss = 0
+            _loss = 0
             # k in q
             if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 1:
-                loss += - log_conditional_prob(query_box, key_box, True)
+                _loss += - log_conditional_prob(query_box, key_box, True)
             # q in k
             if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 1:
-                loss += - log_conditional_prob(key_box, query_box, True)
+                _loss += - log_conditional_prob(key_box, query_box, True)
 
             # k not in q
             if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 0:
                 prob = conditional_prob(query_box, key_box, True)
-                loss += - sim * torch.log(1 - prob)
+                _loss += - sim * torch.log(1 - prob)
 
             # q not in k
             if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 0:
                 prob = conditional_prob(key_box, query_box, True)
-                loss += - sim * torch.log(1 - prob)
+                _loss += - sim * torch.log(1 - prob)
 
-            return loss
+            return _loss
 
+        l = torch.cat(list(map(pair_loss, range(key_boxs.shape[0]))))
+        loss += l.sum()
+    return loss / len(pair_nodes)
 
 

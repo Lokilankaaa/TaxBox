@@ -238,15 +238,26 @@ class BoxDecoder(torch.nn.Module):
 class TreeKiller(torch.nn.Module):
     def __init__(self, box_dim, hidden_size):
         super(TreeKiller, self).__init__()
+        self.train = True
         self.box_decoder = BoxDecoder(box_dim, hidden_size)
         self.node_encoder = MultimodalNodeEncoder(hidden_size)
         self.struct_encoder = StructuralFusionModule(hidden_size)
 
-    def forward(self, node_feature_list, tree):
-        node_features = self.node_encoder(node_feature_list)
+    def change_mode(self):
+        self.train = not self.train
 
-        # noted that the first index of fused_features is not fused
-        pair_node, fused_features = self.struct_encoder(node_features, tree)
+    def forward(self, node_feature_list, leaves_embeds, tree):
+        node_features = self.node_encoder(node_feature_list)
+        if len(leaves_embeds) != 0:
+            for i, emb in leaves_embeds.items():
+                node_features[i] = emb
+
+        if self.train:
+            # noted that the first index of fused_features is not fused
+            pair_node, fused_features = self.struct_encoder(node_features, tree)
+        else:
+            fused_features = node_features
+            pair_node = None
 
         boxes = self.box_decoder(fused_features)
 

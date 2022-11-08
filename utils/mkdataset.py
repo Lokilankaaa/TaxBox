@@ -2,6 +2,8 @@ import time
 import os
 import random
 import json
+from copy import deepcopy
+
 import openai
 import tqdm
 import requests
@@ -96,6 +98,8 @@ def split_tree_dataset(whole_tree_path, split=0.8):
     G = nx.DiGraph()
     G.add_edges_from(edge)
 
+    whole_g = deepcopy(G)
+
     start_id = count_n_level_id(G, 6)
 
     test_eval = random.sample(range(start_id, _id[0]), k=int(_id[0] * (1 - split)))
@@ -105,7 +109,7 @@ def split_tree_dataset(whole_tree_path, split=0.8):
 
     reconstruct()
 
-    return G, names, descriptions, train, test, eva
+    return whole_g, G, names, descriptions, train, test, eva
 
 
 def count_n_level_id(G, n):
@@ -276,7 +280,11 @@ def construct_tree_to_dict(tree, unique=False):
     def dfs(head, unique):
         if unique:
             if head['name'] in d.keys():
-                d[head['name'] + '#' + str(random.randint(0, 99))] = head
+                if head['definition'] != d[head['name']]['definition']:
+                    head['name'] = head['name'] + '#' + head['definition']
+                    d[head['name']] = head
+                else:
+                    pass
             else:
                 d[head['name']] = head
         else:
@@ -379,6 +387,13 @@ if __name__ == '__main__':
     # con = [k for k, _ in dt.items() if k in imagenet_labels]
     # print(len(con), con)
     # print(len(dt))
-    G, names, descriptions, train, test, eva = split_tree_dataset('/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
-    from datasets_torch.treeset import TreeSet
-    t = TreeSet(G, names, descriptions)
+    whole_g, G, names, descriptions, train, test, eva = split_tree_dataset(
+        '/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
+    print(len(train), len(test), len(eva), len(names))
+    import torch
+
+    torch.save({'whole': whole_g,
+                'g': G, 'names': names, 'descriptions': descriptions, 'train': train, 'test': test, 'eva': eva
+                }, 'imagenet_dataset.pt')
+    # from datasets_torch.treeset import TreeSet
+    # t = TreeSet(G, names, descriptions)

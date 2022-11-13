@@ -27,10 +27,14 @@ data_raw = {"text": None, "image": None, "image_url": None, "modality": "image",
 
 num_workers = args.num_workers
 done = os.listdir(args.out_dir)
+t = []
+for l in done:
+    if len(os.listdir(os.path.join('/data/home10b/xw/imagenet21k/imagenet_images', l)))<100:
+        t.append(l)
 datas = json.load(open(args.input_dataset))
 name_to_pointer = construct_tree_to_dict(datas, True)
 name_to_pointer_list = [v for k, v in name_to_pointer.items() if
-                        k.replace('_', ' ') not in done and k not in done]
+                        k.replace('_', ' ') in t or k in t]
 
 # i, j = len(name_to_pointer_list), len(name_to_pointer_list) // num_workers
 # name_to_pointer_list = [name_to_pointer_list[l:l + j] if l + j < i else name_to_pointer_list[l:] for l in
@@ -39,11 +43,11 @@ saved = {}
 
 
 def request_link(head):
-    if head['name'].replace('_', ' ') in os.listdir(args.out_dir):
-        print('pass {}'.format(head['name']))
-        return
-    else:
-        print('starting {}'.format(head['name']))
+    # if head['name'].replace('_', ' ') in os.listdir(args.out_dir):
+    #     print('pass {}'.format(head['name']))
+    #     return
+    # else:
+    #     print('starting {}'.format(head['name']))
     text = head['name'].split('#')[0].replace('_', ' ') + ',' + head['definition']
     data_raw['text'] = text
     while True:
@@ -136,7 +140,7 @@ def download_image(url, label, timeout, path, i):
 def download_one_class(label, value):
     img_links = value
     print("start:", label)
-    if label not in done:
+    if label not in []:
         for i, link in enumerate(tqdm.tqdm(img_links)):
             res = download_image(link, label, 100, args.out_dir, i)
             if res['status'] == 'EXPIRED':

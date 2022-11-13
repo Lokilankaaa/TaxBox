@@ -5,7 +5,7 @@ import random
 import torch
 from .utils import retrieve_model, extract_features_for_imgs, log_conditional_prob, conditional_prob, \
     get_graph_box_embedding, batch_load_img
-from datasets_torch.handcrafted import encode_description
+# from datasets_torch.handcrafted import encode_description
 import numpy as np
 import clip
 import networkx as nx
@@ -125,6 +125,6 @@ def test_entailment(raw_graph, graph_embeddings):
             prob = conditional_prob(graph_embeddings[head['id']], graph_embeddings[cur_name['id']])
 
 
-def transitive_closure_maj(g):
+def transitive_closure_mat(g):
     trans_c = nx.transitive_closure(g, reflexive=True)
-    return nx.adjacency_matrix(trans_c)
+    return nx.adjacency_matrix(trans_c).toarray()

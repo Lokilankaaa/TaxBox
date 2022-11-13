@@ -87,7 +87,7 @@ class AttentionPool2d(nn.Module):
             out_proj_weight=self.c_proj.weight,
             out_proj_bias=self.c_proj.bias,
             use_separate_proj_weight=True,
-            training=self.training,
+            training=self.is_training,
             need_weights=False
         )
         return x.squeeze(0)

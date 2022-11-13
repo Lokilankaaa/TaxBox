@@ -1,4 +1,5 @@
 import os
+from itertools import combinations
 from random import shuffle
 
 import networkx as nx
@@ -7,6 +8,7 @@ from torch.utils.data import Dataset
 import torch
 from queue import Queue
 import numpy as np
+from tqdm import tqdm
 
 from utils.utils import batch_load_img
 
@@ -33,17 +35,23 @@ class TreeSet(Dataset):
         self.mean_order = 0
         self.mini_batches = []
         self.mini_batches_dep = []
+        self.mini_batches_root = []
         self.decs = None
         self.fetch_order = []
         self._database = {}
-        self.box_embeddings = {}
+        self.fused_embeddings = {}
+        self.path_sim_matrix = None
 
         self._init()
         self._process()
         self.shuffle()
 
     def update_box(self, i, embed):
-        self.box_embeddings[i] = embed
+        self.fused_embeddings[i] = embed
+
+    def update_boxes(self, boxes, new_to_old_map):
+        for i, b in enumerate(boxes):
+            self.update_box(new_to_old_map[i], b)
 
     def _get_leaves(self, t=None):
         if t is None:
@@ -74,6 +82,7 @@ class TreeSet(Dataset):
         q.put(0)
         while not q.empty():
             head = q.get()
+            self.mini_batches_root.append(head)
             d = dfs_depth
             if self.decs[head] >= self.batch_size:
                 while nx.traversal.dfs_tree(self._c_tree, head, d).number_of_nodes() > int(self.batch_size * 0.8):
@@ -82,7 +91,7 @@ class TreeSet(Dataset):
                 original_node = list(mini_tree.nodes().keys())
                 append_node = []
                 for c in self._c_tree.successors(head):
-                    if self.decs[c] < int(self.batch_size * 0.2):
+                    if self.decs[c] < int(self.batch_size * 0.1):
                         append_node += list(nx.traversal.dfs_tree(self._c_tree, c).nodes.keys())
                 original_node = list(set(original_node + append_node))
                 mini_tree = deepcopy(self._c_tree.subgraph(original_node))
@@ -123,7 +132,7 @@ class TreeSet(Dataset):
         self._form_mini_batches()
 
     def _check_saved(self):
-        return os.path.exists('tree_data.pt')
+        return os.path.exists('tree_data.pt') and os.path.exists('path_sim_maj.pt')
 
     def _process(self):
         mini_batches_dep_g = nx.DiGraph()
@@ -135,13 +144,30 @@ class TreeSet(Dataset):
         level = []
         while mini_batches_dep_g.number_of_nodes() > 0:
             leaves = get_leaves(mini_batches_dep_g)
-            level.append(leaves)
+            level.append(list(map(self.mini_batches_root.index, leaves)))
             for n in leaves:
                 mini_batches_dep_g.remove_node(n)
         self.fetch_order = level
 
         if self._check_saved():
             self._database = torch.load('tree_data.pt')
+            self.path_sim_matrix = torch.load('path_sim_maj.pt')
+
+            # import clip
+            # m, prep = clip.load('ViT-B/32')
+            # img_path = '/data/home10b/xw/imagenet21k/imagenet_images'
+            # for i, d in self._database.items():
+            #     if d.shape[0] < 101:
+            #         name = self.names[i]
+            #         imgs = [os.path.join(img_path, name, i) for i in os.listdir(os.path.join(img_path, name))]
+            #         imgs = torch.cat(batch_load_img(imgs, prep, 101 - d.shape[0]))
+            #         with torch.no_grad():
+            #             imgs_embedding = m.encode_image(imgs.cuda()).cpu()
+            #         self._database[i] = torch.cat([d, imgs_embedding])
+            #         if self._database[i].shape[0] < 101:
+            #             print(self.names[i])
+            # torch.save(self._database, 'tree_data.pt')
+
         else:
             import clip
             m, prep = clip.load('ViT-B/32')
@@ -169,6 +195,18 @@ class TreeSet(Dataset):
                 self._database[n] = cat_
             torch.save(self._database, 'tree_data.pt')
 
+            self.path_sim_matrix = torch.zeros(len(self._database), len(self._database))
+
+            def cal_sim(comb):
+                self.path_sim_matrix[comb[0], comb[1]] = self.path_sim(comb[0], comb[1])
+                self.path_sim_matrix[comb[1], comb[0]] = self.path_sim_matrix[comb[0], comb[1]]
+
+            for comb in tqdm(combinations(list(self._tree.nodes()), r=2)):
+                cal_sim(comb)
+
+            # list(map(cal_sim, combinations(self._tree.nodes(), r=2)))
+            torch.save(self.path_sim_matrix, 'path_sim_maj.pt')
+
     def __len__(self):
         return len(self.mini_batches)
 
@@ -181,9 +219,19 @@ class TreeSet(Dataset):
         return nx.shortest_path_length(self._undigraph, a, b)
 
     def path_sim(self, a, b):
-        common = nx.lowest_common_ancestor(a, b)
-        common_path = self.distance(0, common)
-        return common_path / (common_path + self.distance(a, b))
+        aa = nx.shortest_path(self._tree, 0, a)
+        bb = nx.shortest_path(self._tree, 0, b)
+        pa = np.array(aa)
+        pb = np.array(bb)
+        if len(pa) > len(pb):
+            pa = pa[:len(pb)]
+        elif len(pb) > len(pa):
+            pb = pb[:len(pa)]
+        common_path = ((pa - pb) == 0).sum()
+
+        # common = nx.lowest_common_ancestor(self._tree, a, b)
+        # common_path = self.distance(0, common)
+        return common_path / (len(aa) + len(bb) - common_path)
 
     def path_between(self, a, b):
         return nx.shortest_path(self._undigraph, a, b)
@@ -204,22 +252,25 @@ class TreeSet(Dataset):
         for _ in self.fetch_order:
             l += _
 
-        g = l[idx]
+        g = self.mini_batches[l[idx]]
         leaves = self._get_leaves(g)
         node_feature_list = []
         old_to_new_label_lookup = {}
-        new_to_old_label_lookup = {}
+        new_to_old_label_lookup = []
         for i, node in enumerate(g.nodes()):
             old_to_new_label_lookup[node] = i
-            new_to_old_label_lookup[i] = node
-            node_feature_list.append(self._database[node])
+            new_to_old_label_lookup.append(node)
+            node_feature_list.append(self._database[node].unsqueeze(0))
         new_g = nx.relabel_nodes(g, old_to_new_label_lookup)
         leaves_embeds = dict(
-            (old_to_new_label_lookup[k], self.box_embeddings[k]) for k in leaves if k in self.box_embeddings.keys())
+            (old_to_new_label_lookup[k], self.fused_embeddings[k]) for k in leaves if k in self.fused_embeddings.keys())
+
+        path_sim = self.path_sim_matrix[new_to_old_label_lookup][:, new_to_old_label_lookup]
 
         # old: label in original tree, new: range from 0 to len(g)
         # new_g and node_feature_list are one-to-one
-        return new_g, torch.cat(node_feature_list), leaves_embeds, old_to_new_label_lookup, new_to_old_label_lookup
+        return new_g, torch.cat(
+            node_feature_list), leaves_embeds, old_to_new_label_lookup, new_to_old_label_lookup, path_sim
 
 
 if __name__ == "__main__":

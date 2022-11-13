@@ -2,11 +2,11 @@ import torch
 import clip
 import torch.nn.functional as F
 from copy import deepcopy
-from torch_geometric.nn import GATv2Conv
 import numpy as np
 from .module import Transformer
 from transformers import ViltModel, ViltConfig, BertConfig, BertModel
-from utils.graph_operate import transitive_closure_maj
+from utils.graph_operate import transitive_closure_mat
+from utils.loss import adaptive_BCE
 
 
 class NodeEncoder(torch.nn.Module):
@@ -171,14 +171,14 @@ class twinTransformer(torch.nn.Module):
 class MultimodalNodeEncoder(torch.nn.Module):
     def __init__(self, hidden_size):
         super(MultimodalNodeEncoder, self).__init__()
-        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64)
+        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64, num_hidden_layers=12)
         self.vilt = ViltModel(self.config)
         self.cls_token = torch.nn.Parameter((torch.zeros(1, 1, 512)))
 
     def forward(self, text_embeds, imgs_embeds):
         cls_token = self.cls_token.expand(text_embeds.shape[0], -1, -1)
         img_masks = torch.ones((text_embeds.shape[0], 1, imgs_embeds.shape[1] + 1)).to(text_embeds.device)
-        text_embeds = torch.cat([cls_token, text_embeds], dim=1)
+        text_embeds = torch.cat([cls_token, text_embeds.unsqueeze(1)], dim=1)
         imgs_embeds = torch.cat([cls_token, imgs_embeds], dim=1)
         res = self.vilt(inputs_embeds=text_embeds, image_embeds=imgs_embeds, return_dict=True,
                         pixel_mask=img_masks)
@@ -189,32 +189,48 @@ class StructuralFusionModule(torch.nn.Module):
     def __init__(self, hidden_size):
         super(StructuralFusionModule, self).__init__()
         self.cfg = BertConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64,
-                              num_hidden_layers=3)
+                              num_hidden_layers=3, max_position_embeddings=512)
         self.fusion = BertModel(self.cfg)
+        self.is_training = True
 
-    def forward(self, node_feature_list, node_tree):
+    def change_mode(self):
+        self.is_training = not self.is_training
+
+    def generate_mask(self, maj):
+        return torch.Tensor(maj).unsqueeze(0)
+
+    def forward(self, node_feature_list, paired_nodes, node_tree):
         # generate matching tree
         # node_feature_list: n * feature_dim
+
         attention_mask = []
         batch_nodes = []
-        pair_node = []
-        for n in node_tree.nodes():
-            _c_tree = deepcopy(node_tree)
-            _c_tree.remove_node(n)
-            selected_tree_nodes = torch.cat(
-                [node_feature_list[:n, ], [node_feature_list[n + 1:, :]]])
-            maj = transitive_closure_maj(_c_tree)  # (n-1) * (n-1)
-            attention_mask.append(self.generate_mask(maj))
-            batch_nodes.append(selected_tree_nodes)
-            pair_node.append(n)
+        if self.is_training:
+            for n in paired_nodes:
+                _c_tree = deepcopy(node_tree)
+                f = list(_c_tree.predecessors(n))
+                if len(f) != 0:
+                    for s in _c_tree.successors(n):
+                        _c_tree.add_edge(f[0], s)
+                _c_tree.remove_node(n)
+                selected_tree_nodes = torch.cat(
+                    [node_feature_list[:n, ], node_feature_list[n + 1:, :]])
+                mat = transitive_closure_mat(_c_tree)  # (n-1) * (n-1)
+                attention_mask.append(self.generate_mask(mat))
+                batch_nodes.append(selected_tree_nodes.unsqueeze(0))
 
-        batch_nodes = torch.cat(batch_nodes)
-        # attention_mask shape: n * n * n
-        attention_mask = torch.cat(torch.Tensor(attention_mask).to(batch_nodes.device))
+            batch_nodes = torch.cat(batch_nodes)
+            # attention_mask shape: n * n * n
+            attention_mask = torch.cat(attention_mask).to(batch_nodes.device)
 
-        res = self.fusion(input_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
-        fused = torch.cat([node_feature_list[pair_node], res['last_hidden_state']])
-        return pair_node, fused  # fused: sep node and other nodes
+        else:
+            mat = transitive_closure_mat(node_tree)
+            attention_mask = self.generate_mask(mat)
+            batch_nodes = node_feature_list.unsqueeze(0)
+
+        res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+        fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']], dim=1) if self.is_training else res['last_hidden_state']
+        return fused  # fused: sep node and other nodes
         # fused shape: n * n * feature_dim
 
 
@@ -238,30 +254,34 @@ class BoxDecoder(torch.nn.Module):
 class TreeKiller(torch.nn.Module):
     def __init__(self, box_dim, hidden_size):
         super(TreeKiller, self).__init__()
-        self.train = True
+        self.is_training = True
         self.box_decoder = BoxDecoder(box_dim, hidden_size)
         self.node_encoder = MultimodalNodeEncoder(hidden_size)
         self.struct_encoder = StructuralFusionModule(hidden_size)
 
     def change_mode(self):
-        self.train = not self.train
+        self.is_training = not self.is_training
+        self.struct_encoder.change_mode()
 
-    def forward(self, node_feature_list, leaves_embeds, tree):
-        node_features = self.node_encoder(node_feature_list)
+    def decode_box(self, features):
+        return self.box_decoder(features)
+
+    def forward(self, node_feature_list, leaves_embeds, paired_nodes, tree):
+        node_features = self.node_encoder(node_feature_list[:, 0, :], node_feature_list[:, 1:, :])
         if len(leaves_embeds) != 0:
             for i, emb in leaves_embeds.items():
                 node_features[i] = emb
 
-        if self.train:
-            # noted that the first index of fused_features is not fused
-            pair_node, fused_features = self.struct_encoder(node_features, tree)
-        else:
-            fused_features = node_features
-            pair_node = None
+        # noted that the first index of fused_features is not fused
+
+        fused_features = self.struct_encoder(node_features, paired_nodes, tree)
+
+        if not self.is_training:
+            return fused_features
 
         boxes = self.box_decoder(fused_features)
 
-        return pair_node, boxes
+        return boxes
 
 
 if __name__ == "__main__":

@@ -5,13 +5,12 @@ import os
 
 from utils.mkdataset import split_tree_dataset
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
 
-from datasets_torch.handcrafted import Handcrafted
+# from datasets_torch.handcrafted import Handcrafted
 from datasets_torch.nodeset import NodeSet
 from datasets_torch.treeset import TreeSet
 import torch
-from model.visgnn import GCN
 from model.node_encoder import NodeEncoder, twinTransformer, MultimodalNodeEncoder, TreeKiller
 import configparser
 from utils.loss import triplet_loss, contrastive_loss, adaptive_BCE
@@ -42,8 +41,8 @@ parser.add_argument("--parallel", action="store_true")
 parser.add_argument("--load_dataset_pt", type=str, default='imagenet_dataset.pt')
 
 
-def get_dataset(root, dataset):
-    return Handcrafted(root)
+# def get_dataset(root, dataset):
+#     return Handcrafted(root)
 
 
 def prepare(args, step_size=400, gamma=0.5, parallel=True):
@@ -56,7 +55,9 @@ def prepare(args, step_size=400, gamma=0.5, parallel=True):
     optimizer = torch.optim.Adam(params=model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
     if parallel:
-        model = torch.nn.parallel.DataParallel(model)
+        model.node_encoder = torch.nn.parallel.DataParallel(model.node_encoder)
+        model.struct_encoder.fusion = torch.nn.parallel.DataParallel(model.struct_encoder.fusion)
+        model.box_decoder = torch.nn.parallel.DataParallel(model.box_decoder)
     return model, optimizer, scheduler, device
 
 
@@ -82,10 +83,20 @@ def train(model, dataset, optimizer, scheduler, device, args):
 
             optimizer.zero_grad()
 
-            g, node_features, leaves_embeds, _, new_to_old = batch
+            g, node_features, leaves_embeds, _, new_to_old, path_sim = batch
             node_features = node_features.to(device)
-            pair_node, boxes = model(node_features, leaves_embeds, g)
-            loss = adaptive_BCE(pair_node, boxes, g, dataset.path_sim, new_to_old)
+            paired_nodes = list(range(node_features.shape[0]))
+            boxes = model(node_features, leaves_embeds, paired_nodes, g)
+            loss = adaptive_BCE(paired_nodes, boxes, g, path_sim)
+
+            # updating boxes storage
+            with torch.no_grad():
+                model.eval()
+                model.change_mode()
+                fused = model(node_features, leaves_embeds, paired_nodes, g).detach()
+                dataset.update_boxes(fused.squeeze(0), new_to_old)
+                model.change_mode()
+                model.train()
             # text, img = [], []
             #
             # for i in batch:
@@ -110,13 +121,8 @@ def train(model, dataset, optimizer, scheduler, device, args):
             #     print(q[random.randint(0, q.shape[0] - 1)])
             if total_iters % 10 == 0:
                 print(e, total_iters, pe / 10)
-                # writer.add_scalar('pos num', pp / 10, total_iters)
-                # writer.add_scalar('n loss', pn / 10, total_iters)
                 writer.add_scalar('total loss', pe / 10, total_iters)
-                print(e, pp / 10)
-                # pe, pp, pn = 0, 0, 0
                 pe = 0
-                pp = 0
             if not torch.isnan(loss):
                 loss.backward()
                 optimizer.step()
@@ -124,7 +130,7 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 return
             if scheduler.get_lr()[0] > 1e-8:
                 scheduler.step()
-        # __test(dataset, model)
+        __test(dataset, model)
         checkpoint(args.saved_model_path, model)
     writer.close()
 

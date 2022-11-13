@@ -6,7 +6,9 @@ from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_p
 from .utils import sample_path, sample_pair
 import numpy as np
 import torch.nn.functional as F
-from .graph_operate import transitive_closure_maj
+from .graph_operate import transitive_closure_mat
+from functorch import vmap
+from itertools import combinations
 
 
 # def contrastive_loss(x, num_path, num_samples, raw_graph, margin=2000):
@@ -106,39 +108,47 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     return loss, test_prob / count
 
 
-def adaptive_BCE(pair_nodes, b_boxes, tree, sim_F, new_to_old_label_lookup):
-    trans_clo_maj = transitive_closure_maj(tree)
-    loss = 0
-    for query, boxes in zip(pair_nodes, b_boxes):
+def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim, sample_num=10):
+    trans_clo_maj = torch.Tensor(transitive_closure_mat(tree)).type(torch.bool).to(b_boxes.device)
+
+    reaches = []
+    reaches_inv = []
+    sims = []
+    sims_inv = []
+    for q in pair_nodes:
+        reaches.append(torch.cat([trans_clo_maj[:q, q], trans_clo_maj[q + 1:, q]]).unsqueeze(0))
+        reaches_inv.append(torch.cat([trans_clo_maj[q, :q], trans_clo_maj[q, q + 1:]]).unsqueeze(0))
+        sims.append(torch.cat([path_sim[:q, q], path_sim[q+ 1:, q]]).unsqueeze(0))
+        sims_inv.append(torch.cat([path_sim[q, :q], path_sim[q, q + 1:]]).unsqueeze(0))
+    reaches = torch.cat(reaches).to(b_boxes.device)
+    reaches_inv = torch.cat(reaches_inv).to(b_boxes.device)
+    sims = torch.cat(sims).to(b_boxes.device)
+    sims_inv = torch.cat(sims_inv).to(b_boxes.device)
+
+    def node_graph_loss(boxes, reach, reach_inv, sim, sim_inv):
         query_box = boxes[0]
-        key_boxs = boxes[1:, ]
+        key_boxes = boxes[1:, ]
+        loss = torch.zeros(key_boxes.shape[0]).to(key_boxes.device)
 
-        def pair_loss(_idx):
-            key_box = key_boxs[_idx]
-            sim = sim_F(new_to_old_label_lookup[query], new_to_old_label_lookup[_idx])
+        # q in k
+        loss = loss - (reach * log_conditional_prob(key_boxes, query_box, True))
 
-            _loss = 0
-            # k in q
-            if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 1:
-                _loss += - log_conditional_prob(query_box, key_box, True)
-            # q in k
-            if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 1:
-                _loss += - log_conditional_prob(key_box, query_box, True)
+        # k in q
+        loss = loss - (reach_inv * log_conditional_prob(query_box, key_boxes, True))
 
-            # k not in q
-            if trans_clo_maj[new_to_old_label_lookup[query]][new_to_old_label_lookup[_idx]] == 0:
-                prob = conditional_prob(query_box, key_box, True)
-                _loss += - sim * torch.log(1 - prob)
+        # q not in k
+        probs = conditional_prob(key_boxes, query_box, True)
+        cnts = probs > sim
+        loss = loss - torch.logical_not(reach) * cnts * torch.log(1 - probs)
 
-            # q not in k
-            if trans_clo_maj[new_to_old_label_lookup[_idx]][new_to_old_label_lookup[query]] == 0:
-                prob = conditional_prob(key_box, query_box, True)
-                _loss += - sim * torch.log(1 - prob)
+        # k not in q
+        probs = conditional_prob(query_box, key_boxes, True)
+        cnts = probs > sim_inv
+        loss = loss - torch.logical_not(reach_inv) * cnts * torch.log(1 - probs)
 
-            return _loss
+        return loss.sum()
 
-        l = torch.cat(list(map(pair_loss, range(key_boxs.shape[0]))))
-        loss += l.sum()
-    return loss / len(pair_nodes)
+    v_f = vmap(node_graph_loss)
 
-
+    res = v_f(b_boxes, reaches, reaches_inv, sims, sims_inv)
+    return res.mean() + regularization_loss(b_boxes.reshape(-1, b_boxes.shape[-1]))

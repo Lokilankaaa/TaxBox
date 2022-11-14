@@ -116,13 +116,36 @@ def test_on_insert(dataset, model, path_to_json, box_dim):
 #
 
 
-def test_entailment(raw_graph, graph_embeddings):
-    head_name = 'object'
-    head = raw_graph[head_name]
-    while 'children' in head.keys():
-        for child in head['children']:
-            cur_name = list(child.keys())[0]
-            prob = conditional_prob(graph_embeddings[head['id']], graph_embeddings[cur_name['id']])
+def test_entailment(boxes, box, graph):
+    head = 0
+    threshold = 0.5
+
+    while len(list(graph.successors(head))) > 0:
+        max_prob_novel_in_c = -1
+        max_prob_c_in_novel = -1
+        choose_child = None
+        choose_father = None
+        for c in graph.successors(head):
+            c_embed = boxes[c]
+            prob_c_in_novel = conditional_prob(box, c_embed.to(box.device))
+            prob_novel_in_c = conditional_prob(c_embed.to(box.device), box)
+            if prob_novel_in_c > prob_c_in_novel:
+                if prob_novel_in_c > max_prob_novel_in_c and prob_novel_in_c > threshold:
+                    max_prob_novel_in_c = prob_novel_in_c
+                    choose_child = c
+            else:
+                if prob_c_in_novel > max_prob_c_in_novel and prob_c_in_novel > threshold:
+                    max_prob_c_in_novel = prob_c_in_novel
+                    choose_father = c
+
+        if choose_father is None and choose_child is None:
+            return nx.shortest_path(graph, 0, head) + [-1]
+        elif max_prob_c_in_novel < max_prob_novel_in_c:
+            head = choose_child
+        else:
+            return nx.shortest_path(graph, 0, choose_father).insert(-2, -1)
+    if len(head['children']) == 0:
+        return nx.shortest_path(graph, 0, head) + [-1]
 
 
 def transitive_closure_mat(g):

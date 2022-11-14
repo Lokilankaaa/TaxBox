@@ -1,11 +1,12 @@
 import math
+import pprint
 
 import tqdm
 import os
 
 from utils.mkdataset import split_tree_dataset
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3'
 
 # from datasets_torch.handcrafted import Handcrafted
 from datasets_torch.nodeset import NodeSet
@@ -15,7 +16,7 @@ from model.node_encoder import NodeEncoder, twinTransformer, MultimodalNodeEncod
 import configparser
 from utils.loss import triplet_loss, contrastive_loss, adaptive_BCE
 import logging
-from utils.graph_operate import test_on_insert
+from utils.graph_operate import test_on_insert, test_entailment
 from utils.visualize_graph import *
 from utils.metric import TreeMetric
 from utils.utils import sample_path, sample_pair, checkpoint, sample_triples, sample_n_nodes, adjust_moco_momentum
@@ -31,6 +32,7 @@ parser.add_argument("--regularization_loss", type=bool, default=True)
 parser.add_argument("--gpu_id", type=str, default='0,1')
 parser.add_argument("--saved_model_path", type=str, default='model.pth')
 parser.add_argument("--lr", type=float, default=1e-4)
+parser.add_argument("--epoch", type=int, default=20)
 parser.add_argument("--max_imgs_per_node", type=int, default=100)
 parser.add_argument("--sample_nums", type=int, default=50)
 parser.add_argument("--batch_size", type=int, default=200)
@@ -45,7 +47,7 @@ parser.add_argument("--load_dataset_pt", type=str, default='imagenet_dataset.pt'
 #     return Handcrafted(root)
 
 
-def prepare(args, step_size=400, gamma=0.5, parallel=True):
+def prepare(args, step_size=5, gamma=0.5, parallel=True):
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
     # model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
@@ -63,10 +65,11 @@ def prepare(args, step_size=400, gamma=0.5, parallel=True):
 
 def train(model, dataset, optimizer, scheduler, device, args):
     writer = SummaryWriter(comment='NodeEncoder')
+    metric = TreeMetric()
     model.train()
     # sample_nums = args.sample_nums
     total_iters = 0
-    for e in range(20):
+    for e in range(args.epoch):
         pe, pp, pn = 0, 0, 0
         dataset.shuffle()
         for batch in tqdm.tqdm(dataset):
@@ -128,15 +131,45 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 optimizer.step()
             else:
                 return
-            if scheduler.get_lr()[0] > 1e-8:
-                scheduler.step()
-        __test(dataset, model)
+        if scheduler.get_lr()[0] > 1e-8:
+            scheduler.step()
+        __test(dataset, model, metric, 'eval')
+        dataset.clear_boxes()
         checkpoint(args.saved_model_path, model)
     writer.close()
 
 
-def __test(dataset, model):
-    test_on_insert(dataset, model, 'datasets_json/handcrafted_test.json', args.box_dim)
+def __test(dataset, model, metric, mode):
+    assert mode in ('eval', 'test')
+    print('{}....'.format(mode))
+    metric.clear()
+    dataset.change_mode('train')
+    model.eval()
+    model.change_mode()
+    with torch.no_grad():
+        for b in dataset:
+            g, node_features, leaves_embeds, _, new_to_old, path_sim = b
+            fused = model(node_features, leaves_embeds, None, g).detach()
+            dataset.update_boxes(fused.squeeze(0), new_to_old)
+        boxes = {}
+        for k, v in dataset.fused_embeddings.items():
+            boxes[k] = model.box_decoder(v.unsqueeze(0))
+        dataset.change_mode(mode)
+        for n in tqdm.tqdm(dataset):
+            node_feature, gt_path, idx = n
+            node_feature = node_feature.unsqueeze(0).to(boxes[0].device)
+            feature = model.node_encoder(node_feature[:, 0, :], node_feature[:, 1, :].unsqueeze(0))
+            box = model.decode_box(feature)
+            res = test_entailment(boxes, box, dataset._tree)
+            if res[-1] == -1:
+                res[-1] = idx
+            elif res[-2] == -1:
+                res[-2] = idx
+            metric.update(res, gt_path)
+    pprint.pprint(metric.show_results())
+    dataset.change_mode('train')
+    model.change_mode()
+    model.train()
 
 
 def main(args):
@@ -157,7 +190,8 @@ def main(args):
         train(model, dataset, optimizer, scheduler, device, args)
     if args.test:
         model.load_state_dict(torch.load(args.saved_model_path))
-        __test(dataset, model)
+        metric = TreeMetric()
+        __test(dataset, model, metric, 'test')
 
 
 if __name__ == '__main__':

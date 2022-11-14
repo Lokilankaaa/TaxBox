@@ -222,16 +222,18 @@ class StructuralFusionModule(torch.nn.Module):
             batch_nodes = torch.cat(batch_nodes)
             # attention_mask shape: n * n * n
             attention_mask = torch.cat(attention_mask).to(batch_nodes.device)
+            res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+            fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']],
+                              dim=1) if self.is_training else res['last_hidden_state']
+            return fused  # fused: sep node and other nodes
+            # fused shape: n * n * feature_dim
 
         else:
             mat = transitive_closure_mat(node_tree)
             attention_mask = self.generate_mask(mat)
             batch_nodes = node_feature_list.unsqueeze(0)
-
-        res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
-        fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']], dim=1) if self.is_training else res['last_hidden_state']
-        return fused  # fused: sep node and other nodes
-        # fused shape: n * n * feature_dim
+            res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+            return res['last_hidden_state']
 
 
 class BoxDecoder(torch.nn.Module):

@@ -138,12 +138,12 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim, sample_num=10):
 
         # q not in k
         probs = conditional_prob(key_boxes, query_box, True)
-        cnts = probs > sim
+        cnts = probs > sim / 1.5
         loss = loss - torch.logical_not(reach) * cnts * torch.log(1 - probs)
 
         # k not in q
         probs = conditional_prob(query_box, key_boxes, True)
-        cnts = probs > sim_inv
+        cnts = probs > sim_inv / 1.5
         loss = loss - torch.logical_not(reach_inv) * cnts * torch.log(1 - probs)
 
         return loss.sum()

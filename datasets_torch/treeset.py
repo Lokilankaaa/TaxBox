@@ -53,6 +53,9 @@ class TreeSet(Dataset):
         for i, b in enumerate(boxes):
             self.update_box(new_to_old_map[i], b)
 
+    def clear_boxes(self):
+        self.fused_embeddings = {}
+
     def _get_leaves(self, t=None):
         if t is None:
             self.leaves = list([node for node in self._tree.nodes.keys() if self._tree.out_degree(node) == 0])
@@ -85,13 +88,14 @@ class TreeSet(Dataset):
             self.mini_batches_root.append(head)
             d = dfs_depth
             if self.decs[head] >= self.batch_size:
-                while nx.traversal.dfs_tree(self._c_tree, head, d).number_of_nodes() > int(self.batch_size * 0.8):
+                while nx.traversal.dfs_tree(self._c_tree, head, d).number_of_nodes() > int(
+                        self.batch_size * 0.5) and d > 0:
                     d -= 1
                 mini_tree = nx.traversal.dfs_tree(self._c_tree, head, d + 1)
                 original_node = list(mini_tree.nodes().keys())
                 append_node = []
                 for c in self._c_tree.successors(head):
-                    if self.decs[c] < int(self.batch_size * 0.1):
+                    if self.decs[c] < int(10):
                         append_node += list(nx.traversal.dfs_tree(self._c_tree, c).nodes.keys())
                 original_node = list(set(original_node + append_node))
                 mini_tree = deepcopy(self._c_tree.subgraph(original_node))
@@ -237,16 +241,14 @@ class TreeSet(Dataset):
         return nx.shortest_path(self._undigraph, a, b)
 
     def change_mode(self, mode):
-        assert mode in ('train', 'test', 'eva')
+        assert mode in ('train', 'test', 'eval')
         self.mode = mode
 
     def __getitem__(self, idx):
-        if self.mode == 'eva':
-            return self._database[self.eva[idx]], list(
-                [n for n in nx.shortest_path(self.whole, self.eva[idx], 0) if n in self.train])
+        if self.mode == 'eval':
+            return self._database[self.eva[idx]], nx.shortest_path(self.whole, 0, self.eva[idx]), self.eva[idx]
         if self.mode == 'test':
-            return self._database[self.test[idx]], list(
-                [n for n in nx.shortest_path(self.whole, self.test[idx], 0) if n in self.train])
+            return self._database[self.test[idx]], nx.shortest_path(self.whole, 0, self.test[idx]), self.test[idx]
 
         l = []
         for _ in self.fetch_order:

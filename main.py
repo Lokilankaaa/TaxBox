@@ -21,9 +21,7 @@ from utils.visualize_graph import *
 from utils.metric import TreeMetric
 from utils.utils import sample_path, sample_pair, checkpoint, sample_triples, sample_n_nodes, adjust_moco_momentum
 from tensorboardX import SummaryWriter
-import clip
-import random
-import numpy as np
+from utils.scheduler import get_scheduler
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -47,15 +45,20 @@ parser.add_argument("--load_dataset_pt", type=str, default='imagenet_dataset.pt'
 #     return Handcrafted(root)
 
 
-def prepare(args, step_size=5, gamma=0.5, parallel=True):
+def prepare(args, parallel=True):
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
     # model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
     model = TreeKiller(args.box_dim, 512)
     # prep = model.preprocess
     model.to(device)
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    optimizer = torch.optim.Adam(params=[
+        {'params': model.node_encoder.parameters(), 'lr': args.lr},
+        {'params': model.struct_encoder.parameters(), 'lr': args.lr},
+        {'params': model.box_decoder.parameters()},
+    ], lr=args.lr)
+    total_iters = 206 * args.epoch
+    scheduler = get_scheduler(optimizer, 'warmupcosine', 0.06 * total_iters, total_iters)
     if parallel:
         model.node_encoder = torch.nn.parallel.DataParallel(model.node_encoder)
         model.struct_encoder.fusion = torch.nn.parallel.DataParallel(model.struct_encoder.fusion)
@@ -70,7 +73,7 @@ def train(model, dataset, optimizer, scheduler, device, args):
     # sample_nums = args.sample_nums
     total_iters = 0
     for e in range(args.epoch):
-        pe, pp, pn = 0, 0, 0
+        pe = 0
         dataset.shuffle()
         for batch in tqdm.tqdm(dataset):
             # paths = sample_path(dataset.raw_graph, 4)
@@ -131,11 +134,11 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 optimizer.step()
             else:
                 return
-        if scheduler.get_lr()[0] > 1e-8:
             scheduler.step()
-        __test(dataset, model, metric, 'eval')
+        # __test(dataset, model, metric, 'eval')
         dataset.clear_boxes()
         checkpoint(args.saved_model_path, model)
+    __test(dataset, model, metric, 'test')
     writer.close()
 
 
@@ -143,6 +146,7 @@ def __test(dataset, model, metric, mode):
     assert mode in ('eval', 'test')
     print('{}....'.format(mode))
     metric.clear()
+    dataset.clear_boxes()
     dataset.change_mode('train')
     model.eval()
     model.change_mode()
@@ -151,21 +155,20 @@ def __test(dataset, model, metric, mode):
             g, node_features, leaves_embeds, _, new_to_old, path_sim = b
             fused = model(node_features, leaves_embeds, None, g).detach()
             dataset.update_boxes(fused.squeeze(0), new_to_old)
-        boxes = {}
+        boxes = []
+        new_to_old = []
         for k, v in dataset.fused_embeddings.items():
-            boxes[k] = model.box_decoder(v.unsqueeze(0))
+            new_to_old.append(k)
+            boxes.append(model.box_decoder(v.unsqueeze(0)))
+        boxes = torch.cat(boxes)
         dataset.change_mode(mode)
         for n in tqdm.tqdm(dataset):
             node_feature, gt_path, idx = n
             node_feature = node_feature.unsqueeze(0).to(boxes[0].device)
             feature = model.node_encoder(node_feature[:, 0, :], node_feature[:, 1, :].unsqueeze(0))
             box = model.decode_box(feature)
-            res = test_entailment(boxes, box, dataset._tree)
-            if res[-1] == -1:
-                res[-1] = idx
-            elif res[-2] == -1:
-                res[-2] = idx
-            metric.update(res, gt_path)
+            novel_in_c, c_in_novel = test_entailment(boxes, box)
+            metric.update((novel_in_c, c_in_novel), gt_path, new_to_old, dataset._tree)
     pprint.pprint(metric.show_results())
     dataset.change_mode('train')
     model.change_mode()

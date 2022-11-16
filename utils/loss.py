@@ -108,7 +108,8 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     return loss, test_prob / count
 
 
-def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim, sample_num=10):
+def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
+    epsilon = torch.Tensor([1e-8]).to(b_boxes.device)
     trans_clo_maj = torch.Tensor(transitive_closure_mat(tree)).type(torch.bool).to(b_boxes.device)
 
     reaches = []
@@ -118,7 +119,7 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim, sample_num=10):
     for q in pair_nodes:
         reaches.append(torch.cat([trans_clo_maj[:q, q], trans_clo_maj[q + 1:, q]]).unsqueeze(0))
         reaches_inv.append(torch.cat([trans_clo_maj[q, :q], trans_clo_maj[q, q + 1:]]).unsqueeze(0))
-        sims.append(torch.cat([path_sim[:q, q], path_sim[q+ 1:, q]]).unsqueeze(0))
+        sims.append(torch.cat([path_sim[:q, q], path_sim[q + 1:, q]]).unsqueeze(0))
         sims_inv.append(torch.cat([path_sim[q, :q], path_sim[q, q + 1:]]).unsqueeze(0))
     reaches = torch.cat(reaches).to(b_boxes.device)
     reaches_inv = torch.cat(reaches_inv).to(b_boxes.device)
@@ -138,15 +139,19 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim, sample_num=10):
 
         # q not in k
         probs = conditional_prob(key_boxes, query_box, True)
-        cnts = probs > sim / 1.5
-        loss = loss - torch.logical_not(reach) * cnts * torch.log(1 - probs)
+        margin = torch.log(1 - sim / 1.5) - torch.log(1 - probs + epsilon)
+        loss = loss + torch.logical_not(reach) * (margin > 0) * margin
+        # cnts = probs > sim / 1.5
+        # loss = loss - torch.logical_not(reach) * cnts * torch.log(1 - probs + epsilon)
 
         # k not in q
         probs = conditional_prob(query_box, key_boxes, True)
-        cnts = probs > sim_inv / 1.5
-        loss = loss - torch.logical_not(reach_inv) * cnts * torch.log(1 - probs)
+        margin = torch.log(1 - sim_inv / 1.5) - torch.log(1 - probs + epsilon)
+        loss = loss + torch.logical_not(reach_inv) * (margin > 0) * margin
+        # cnts = probs > sim_inv / 1.5
+        # loss = loss - torch.logical_not(reach_inv) * cnts * torch.log(1 - probs + epsilon)
 
-        return loss.sum()
+        return loss.mean()
 
     v_f = vmap(node_graph_loss)
 

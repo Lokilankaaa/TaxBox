@@ -196,8 +196,8 @@ class StructuralFusionModule(torch.nn.Module):
     def change_mode(self):
         self.is_training = not self.is_training
 
-    def generate_mask(self, maj):
-        return torch.Tensor(maj).unsqueeze(0)
+    def generate_mask(self, mat):
+        return torch.Tensor(mat).unsqueeze(0)
 
     def forward(self, node_feature_list, paired_nodes, node_tree):
         # generate matching tree
@@ -224,7 +224,7 @@ class StructuralFusionModule(torch.nn.Module):
             attention_mask = torch.cat(attention_mask).to(batch_nodes.device)
             res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
             fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']],
-                              dim=1) if self.is_training else res['last_hidden_state']
+                              dim=1)
             return fused  # fused: sep node and other nodes
             # fused shape: n * n * feature_dim
 

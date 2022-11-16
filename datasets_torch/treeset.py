@@ -212,7 +212,12 @@ class TreeSet(Dataset):
             torch.save(self.path_sim_matrix, 'path_sim_maj.pt')
 
     def __len__(self):
-        return len(self.mini_batches)
+        if self.mode == 'train':
+            return len(self.mini_batches)
+        elif self.mode == 'eval':
+            return len(self.eva)
+        else:
+            return len(self.test)
 
     def shuffle(self):
         if len(self.fetch_order) != 0:

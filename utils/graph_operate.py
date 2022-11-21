@@ -4,7 +4,7 @@ import random
 
 import torch
 from .utils import retrieve_model, extract_features_for_imgs, log_conditional_prob, conditional_prob, \
-    get_graph_box_embedding, batch_load_img
+    get_graph_box_embedding, batch_load_img, hard_intersection
 # from datasets_torch.handcrafted import encode_description
 import numpy as np
 import clip
@@ -118,12 +118,14 @@ def beam_search(k=2):
     pass
 
 
-def test_entailment(boxes, novel_box):
+def test_entailment(boxes, novel_box, fs_pairs, old_to_new):
+    q_k_intersection = hard_intersection(novel_box, boxes, True)
+    f, s = old_to_new[fs_pairs[:, 0]], old_to_new[fs_pairs[:, 1]]
+    s_in_f = conditional_prob(q_k_intersection[f], q_k_intersection[s], True)
 
     prob_novel_in_c = conditional_prob(boxes, novel_box, True)
-    prob_c_in_novel = conditional_prob(novel_box, boxes, True)
 
-    return prob_novel_in_c, prob_c_in_novel
+    return prob_novel_in_c, s_in_f
 
     # head = 0
     # threshold = 0.5
@@ -159,3 +161,7 @@ def test_entailment(boxes, novel_box):
 def transitive_closure_mat(g):
     trans_c = nx.transitive_closure(g, reflexive=True)
     return nx.adjacency_matrix(trans_c).toarray()
+
+
+def adj_mat(g):
+    return g.adjacency_list()

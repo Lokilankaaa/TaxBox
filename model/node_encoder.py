@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 import clip
 import torch.nn.functional as F
@@ -5,8 +7,9 @@ from copy import deepcopy
 import numpy as np
 from .module import Transformer
 from transformers import ViltModel, ViltConfig, BertConfig, BertModel
-from utils.graph_operate import transitive_closure_mat
+from utils.graph_operate import transitive_closure_mat, adj_mat
 from utils.loss import adaptive_BCE
+from torch import nn
 
 
 class NodeEncoder(torch.nn.Module):
@@ -169,9 +172,9 @@ class twinTransformer(torch.nn.Module):
 
 
 class MultimodalNodeEncoder(torch.nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, num_layers):
         super(MultimodalNodeEncoder, self).__init__()
-        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64, num_hidden_layers=12)
+        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64, num_hidden_layers=num_layers)
         self.vilt = ViltModel(self.config)
         self.cls_token = torch.nn.Parameter((torch.zeros(1, 1, 512)))
 
@@ -186,10 +189,10 @@ class MultimodalNodeEncoder(torch.nn.Module):
 
 
 class StructuralFusionModule(torch.nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, num_layers):
         super(StructuralFusionModule, self).__init__()
         self.cfg = BertConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64,
-                              num_hidden_layers=3, max_position_embeddings=512)
+                              num_hidden_layers=num_layers, max_position_embeddings=512)
         self.fusion = BertModel(self.cfg)
         self.is_training = True
 
@@ -205,7 +208,9 @@ class StructuralFusionModule(torch.nn.Module):
 
         attention_mask = []
         batch_nodes = []
+        # adj_mats = []
         if self.is_training:
+            # construct batch, the order is same as paired node
             for n in paired_nodes:
                 _c_tree = deepcopy(node_tree)
                 f = list(_c_tree.predecessors(n))
@@ -217,6 +222,9 @@ class StructuralFusionModule(torch.nn.Module):
                     [node_feature_list[:n, ], node_feature_list[n + 1:, :]])
                 mat = transitive_closure_mat(_c_tree)  # (n-1) * (n-1)
                 attention_mask.append(self.generate_mask(mat))
+                # edge = torch.Tensor(list(_c_tree.edges()))
+                # edge[edge > n] -= 1
+                # adj_mats.append(edge.type(torch.long))
                 batch_nodes.append(selected_tree_nodes.unsqueeze(0))
 
             batch_nodes = torch.cat(batch_nodes)
@@ -236,6 +244,32 @@ class StructuralFusionModule(torch.nn.Module):
             return res['last_hidden_state']
 
 
+class HighwayNetwork(nn.Module):
+    def __init__(self,
+                 input_dim: int,
+                 output_dim: int,
+                 n_layers: int,
+                 activation: Optional[nn.Module] = None):
+        super(HighwayNetwork, self).__init__()
+        self.n_layers = n_layers
+        self.nonlinear = nn.ModuleList(
+            [nn.Linear(input_dim, input_dim) for _ in range(n_layers)])
+        self.gate = nn.ModuleList(
+            [nn.Linear(input_dim, input_dim) for _ in range(n_layers)])
+        for layer in self.gate:
+            layer.bias = torch.nn.Parameter(0. * torch.ones_like(layer.bias))
+        self.final_linear_layer = nn.Linear(input_dim, output_dim)
+        self.activation = nn.ReLU() if activation is None else activation
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        for layer_idx in range(self.n_layers):
+            gate_values = self.sigmoid(self.gate[layer_idx](inputs))
+            nonlinear = self.activation(self.nonlinear[layer_idx](inputs))
+            inputs = gate_values * nonlinear + (1. - gate_values) * inputs
+        return self.final_linear_layer(inputs)
+
+
 class BoxDecoder(torch.nn.Module):
     def __init__(self, box_dim, hidden_size):
         super(BoxDecoder, self).__init__()
@@ -253,13 +287,30 @@ class BoxDecoder(torch.nn.Module):
         return x
 
 
+class Scorer(torch.nn.Module):
+    def __init__(self, box_dim, out_dim):
+        super(Scorer, self).__init__()
+        self.w = torch.nn.Bilinear(box_dim, box_dim, out_dim)
+        self.v = torch.nn.Linear(2 * box_dim, out_dim)
+        self.classifier = torch.nn.Linear(out_dim, 1, bias=False)
+
+    def forward(self, q, f):
+        q = q.expand(f.shape)
+        # out = self.w(q, torch.cat([f, s], dim=-1)) + self.v(torch.cat([q, f, s], dim=-1))
+        out = self.w(q, f) + self.v(torch.cat([q, f], dim=-1))
+        out = torch.nn.Sigmoid()(self.classifier(out)).squeeze(-1)
+        return out
+
+
 class TreeKiller(torch.nn.Module):
-    def __init__(self, box_dim, hidden_size):
+    def __init__(self, box_dim, hidden_size, out_dim=None):
         super(TreeKiller, self).__init__()
         self.is_training = True
-        self.box_decoder = BoxDecoder(box_dim, hidden_size)
-        self.node_encoder = MultimodalNodeEncoder(hidden_size)
-        self.struct_encoder = StructuralFusionModule(hidden_size)
+        # self.box_decoder = BoxDecoder(box_dim, hidden_size)
+        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 4)
+        self.node_encoder = MultimodalNodeEncoder(hidden_size, 12)
+        self.struct_encoder = StructuralFusionModule(hidden_size, 3)
+        self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 2)
 
     def change_mode(self):
         self.is_training = not self.is_training
@@ -282,8 +333,12 @@ class TreeKiller(torch.nn.Module):
             return fused_features
 
         boxes = self.box_decoder(fused_features)
+        q = boxes[:, 0, :].unsqueeze(1)
+        # f = torch.cat([b[i[:, 0], :].unsqueeze(0) for b, i in zip(boxes[1:, 1:, :], fs_pairs[1:])])
+        # s = torch.cat([b[i[:, 1], :].unsqueeze(0) for b, i in zip(boxes[1:, 1:, :], fs_pairs[1:])])
+        scores = self.scorer(q, boxes[:, 1:, :])
 
-        return boxes
+        return boxes, scores
 
 
 if __name__ == "__main__":

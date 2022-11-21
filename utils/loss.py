@@ -6,7 +6,7 @@ from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_p
 from .utils import sample_path, sample_pair
 import numpy as np
 import torch.nn.functional as F
-from .graph_operate import transitive_closure_mat
+from .graph_operate import transitive_closure_mat, adj_mat
 from functorch import vmap
 from itertools import combinations
 
@@ -108,6 +108,20 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     return loss, test_prob / count
 
 
+def cls_loss(scores, paired_nodes, tree):
+    gt_labels = []
+    ignore = -1
+    for i in paired_nodes:
+        if len(list(tree.predecessors(i))) == 0:
+            ignore = i
+            continue
+        f = list(tree.predecessors(i))[0]
+        gt_labels.append(f if f < i else f - 1)
+    scores = torch.cat([scores[:ignore], scores[ignore + 1:]])
+    gt_labels = torch.Tensor(gt_labels).type(torch.long).to(scores.device)
+    return torch.nn.CrossEntropyLoss()(scores, gt_labels)
+
+
 def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
     epsilon = torch.Tensor([1e-8]).to(b_boxes.device)
     trans_clo_maj = torch.Tensor(transitive_closure_mat(tree)).type(torch.bool).to(b_boxes.device)
@@ -139,14 +153,14 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
 
         # q not in k
         probs = conditional_prob(key_boxes, query_box, True)
-        margin = torch.log(1 - sim / 1.5) - torch.log(1 - probs + epsilon)
+        margin = torch.log(1 - sim / 4) - torch.log(1 - probs + epsilon)
         loss = loss + torch.logical_not(reach) * (margin > 0) * margin
         # cnts = probs > sim / 1.5
         # loss = loss - torch.logical_not(reach) * cnts * torch.log(1 - probs + epsilon)
 
         # k not in q
         probs = conditional_prob(query_box, key_boxes, True)
-        margin = torch.log(1 - sim_inv / 1.5) - torch.log(1 - probs + epsilon)
+        margin = torch.log(1 - sim_inv / 4) - torch.log(1 - probs + epsilon)
         loss = loss + torch.logical_not(reach_inv) * (margin > 0) * margin
         # cnts = probs > sim_inv / 1.5
         # loss = loss - torch.logical_not(reach_inv) * cnts * torch.log(1 - probs + epsilon)

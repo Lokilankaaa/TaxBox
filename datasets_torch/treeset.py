@@ -41,6 +41,7 @@ class TreeSet(Dataset):
         self._database = {}
         self.fused_embeddings = {}
         self.path_sim_matrix = None
+        self.fs_pairs = []
 
         self._init()
         self._process()
@@ -74,6 +75,10 @@ class TreeSet(Dataset):
         self.mean_depth = sum(depths) / len(depths)
         self.mean_order = orders.sum() / (orders != 0).sum()
         self._count_descs()
+
+    def generate_fs_pairs(self):
+        list(map(lambda x: self.fs_pairs.append([x[0], x[1]]), self._tree.edges()))
+        self.fs_pairs = torch.Tensor(self.fs_pairs).type(torch.long)
 
     def _form_mini_batches(self):
         dfs_depth = int(np.log(self.batch_size) / np.log(self.mean_order))
@@ -134,6 +139,7 @@ class TreeSet(Dataset):
         self._get_all_paths()
         self._stats()
         self._form_mini_batches()
+        self.generate_fs_pairs()
 
     def _check_saved(self):
         return os.path.exists('tree_data.pt') and os.path.exists('path_sim_maj.pt')
@@ -202,6 +208,7 @@ class TreeSet(Dataset):
             self.path_sim_matrix = torch.zeros(len(self._database), len(self._database))
 
             def cal_sim(comb):
+                # path_sim: a matrix containing all train pairs with whole id
                 self.path_sim_matrix[comb[0], comb[1]] = self.path_sim(comb[0], comb[1])
                 self.path_sim_matrix[comb[1], comb[0]] = self.path_sim_matrix[comb[0], comb[1]]
 
@@ -248,6 +255,12 @@ class TreeSet(Dataset):
     def change_mode(self, mode):
         assert mode in ('train', 'test', 'eval')
         self.mode = mode
+
+    def get_milestone(self):
+        res = [0]
+        for l in self.fetch_order:
+            res.append(res[-1] + len(l))
+        return res[1:-1]
 
     def __getitem__(self, idx):
         if self.mode == 'eval':

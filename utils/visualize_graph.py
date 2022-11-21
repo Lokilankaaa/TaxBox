@@ -22,8 +22,8 @@ def vis_box(dataset, boxes, new_to_old, s_f=None):
     box_f = _boxes[new_to_old.index(f)].cpu().numpy()
     fig = plt.figure()
     for i in range(box_s.shape[0]):
-        plt.vlines(x=i + 1, ymin=box_f[i][0], ymax=box_f[i][1], colors='red')
-        plt.vlines(x=i + 1, ymin=box_s[i][0], ymax=box_s[i][1], colors='blue')
+        plt.vlines(x=i + 1, ymin=box_f[i][0], ymax=box_f[i][1], colors='red', linewidths=2)
+        plt.vlines(x=i + 1, ymin=box_s[i][0], ymax=box_s[i][1], colors='blue', linewidths=1.5)
     plt.show()
     return choose, f
 

@@ -108,18 +108,44 @@ def contrastive_loss(q, k, connect_m, batch, regular=False):
     return loss, test_prob / count
 
 
-def cls_loss(scores, paired_nodes, tree):
+def cls_loss(scores, paired_nodes, fs_pairs, tree):
+    # the order of the batch of scores is same as paired_nodes
     gt_labels = []
     ignore = -1
     for i in paired_nodes:
         if len(list(tree.predecessors(i))) == 0:
             ignore = i
             continue
-        f = list(tree.predecessors(i))[0]
-        gt_labels.append(f if f < i else f - 1)
-    scores = torch.cat([scores[:ignore], scores[ignore + 1:]])
-    gt_labels = torch.Tensor(gt_labels).type(torch.long).to(scores.device)
-    return torch.nn.CrossEntropyLoss()(scores, gt_labels)
+        else:
+            _f = list(tree.predecessors(i))[0]
+            _s = list(tree.successors(i))
+            edge = torch.Tensor(list([[_f, s] for s in _s] + [[_f, -1]]) if len(_s) != 0 else torch.Tensor([[_f, -1]]))
+            edge[edge > i] -= 1
+            gt_label = torch.Tensor([0] * scores.shape[-1]).type(torch.bool)
+
+            if ignore != -1 and i > ignore:
+                i -= 1
+            for e in edge:
+                id0 = (fs_pairs[i][:, 0] - e[0]) == 0
+                id1 = (fs_pairs[i][:, 1] - e[1]) == 0
+                gt_label[id0 * id1] = True
+
+            gt_labels.append(gt_label.unsqueeze(0))
+    gt_labels = torch.cat(gt_labels).to(scores.device)  # n-1 * 2n - 3
+    not_labels = torch.logical_not(gt_labels)
+
+    pos = scores[gt_labels].sum(-1)
+    neg = (1 - scores[not_labels]).sum(-1)
+
+    loss = -torch.log(pos / (pos + neg))
+    return loss.mean()
+    # return torch.nn.BCELoss()(scores, gt_labels)
+
+    #     f = list(tree.predecessors(i))[0]
+    #     gt_labels.append(f if f < i else f - 1)
+    # scores = torch.cat([scores[:ignore], scores[ignore + 1:]])
+    # gt_labels = torch.Tensor(gt_labels).type(torch.long).to(scores.device)
+    # return torch.nn.CrossEntropyLoss()(scores, gt_labels)
 
 
 def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):

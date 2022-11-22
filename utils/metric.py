@@ -14,7 +14,6 @@ class TreeMetric:
         self.hit5 = []
         self.ranks = []
         self.wp = []
-        self.mean_prob = []
 
     def lca(self, a, b):
         pa = np.array(a)
@@ -36,21 +35,20 @@ class TreeMetric:
             'mrr': (1 / np.array(self.ranks)).mean(),
             'mr': np.array(self.ranks).mean(),
             'wup': np.array(self.wp).mean(),
-            'mean_prob': np.array(self.mean_prob).mean()
         }
 
-    def update(self, scores, gt, new_to_old, graph):
+    def update(self, scores, gt, new_to_old, old_to_new, graph, fs_pairs):
+        #scores, fs_pairs: 2n - 1
         gt = list([i for i in gt if i in new_to_old]) + [gt[-1]]
-        ranks = list([new_to_old[rank] for rank in scores.topk(scores.shape[0])[1]])
+        ranks = list([new_to_old[fs_pairs[new_id, 0].item()] for new_id in scores.topk(scores.shape[0])[1]])
         top10 = ranks[:10]
         top5 = ranks[:5]
         path = nx.shortest_path(graph, 0, top5[0])
-        self.acc.append(1 if top5[0] == gt[-2] else 0)
-        self.hit5.append(1 if gt[-2] in top5 else 0)
-        self.hit10.append(1 if gt[-2] in top10 else 0)
+        self.acc.append(top5[0] == gt[-2])
+        self.hit5.append(gt[-2] in top5)
+        self.hit10.append(gt[-2] in top10)
         self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))
         self.ranks.append(ranks.index(gt[-2]) + 1)
-        self.mean_prob.append(scores[self.ranks[-1]].cpu().numpy())
     # def update(self, res, gt, new_to_old, graph, fs_pairs):
     # novel_in_c, s_in_f = res
     # pred = res[0]
@@ -69,4 +67,4 @@ class TreeMetric:
     # self.hit10.append(1 if gt[-2] in top10 else 0)
     # self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))
     # self.ranks.append(sort_pred.index(gt[-2]) + 1)
-    # self.mean_prob.append(pred[self.ranks[-1]].cpu().numpy())
+    # self.mean_prob.append(pred[self.ranks[-1] - 1].cpu().numpy())

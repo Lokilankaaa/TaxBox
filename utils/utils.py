@@ -21,6 +21,7 @@ def adjust_moco_momentum(epoch, m, total_epochs):
     m = 1. - 0.5 * (1. + math.cos(math.pi * epoch / total_epochs)) * (1. - m)
     return m
 
+
 def batch_load_img(imgs_, transform, max_k=50):
     imgs = random.sample(imgs_, k=max_k) if len(imgs_) > max_k else imgs_
     inputs = []
@@ -65,6 +66,11 @@ def checkpoint(path_to_save, model):
     else:
         sd = model.state_dict()
     torch.save(sd, path_to_save)
+
+
+def save_state(path_to_save, scheduler, optimizer, e):
+    print("saving training state to " + path_to_save)
+    torch.save({'scheduler': scheduler.state_dict(), 'optimizer': optimizer.state_dict(), 'e': e}, path_to_save)
 
 
 def id_to_ascendants(_id, id_to_father):
@@ -281,7 +287,7 @@ def hard_intersection(x, y, box_mode=False):
         x = x.unsqueeze(0)
     if y.dim() == 1:
         y = y.unsqueeze(0)
-    assert x.dim() == 2, y.dim() == 2
+    assert x.dim() == y.dim()
     xz, xZ = x.chunk(2, -1)
     yz, yZ = y.chunk(2, -1)
     if box_mode:
@@ -434,7 +440,6 @@ def retrieve_model(model_name, device):
 
     _model.eval().to(device)
     return _model if model_name != 'clip' else _model.encode_image, _preprocess
-
 
 
 if __name__ == '__main__':

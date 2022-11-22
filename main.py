@@ -19,7 +19,8 @@ import logging
 from utils.graph_operate import test_on_insert, test_entailment
 from utils.visualize_graph import *
 from utils.metric import TreeMetric
-from utils.utils import sample_path, sample_pair, checkpoint, sample_triples, sample_n_nodes, adjust_moco_momentum
+from utils.utils import sample_path, sample_pair, checkpoint, sample_triples, sample_n_nodes, adjust_moco_momentum, \
+    save_state
 from tensorboardX import SummaryWriter
 from utils.scheduler import get_scheduler
 import argparse
@@ -39,13 +40,16 @@ parser.add_argument("--test", action="store_true")
 parser.add_argument("--vis_graph", action="store_true")
 parser.add_argument("--parallel", action="store_true")
 parser.add_argument("--load_dataset_pt", type=str, default='imagenet_dataset.pt')
-
+parser.add_argument("--resume", action="store_true")
 
 # def get_dataset(root, dataset):
 #     return Handcrafted(root)
 
+start_e = 0
+
 
 def prepare(args, parallel=True):
+    global start_e
     device = torch.device('cpu') if not torch.cuda.is_available() else torch.device('cuda')
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
     # model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
@@ -65,6 +69,14 @@ def prepare(args, parallel=True):
         model.struct_encoder.fusion = torch.nn.parallel.DataParallel(model.struct_encoder.fusion)
         model.box_decoder = torch.nn.parallel.DataParallel(model.box_decoder)
         model.scorer = torch.nn.parallel.DataParallel(model.scorer)
+    if args.resume:
+        if os.path.exists(args.saved_model_path):
+            model.load_state_dict(torch.load(args.saved_model_path))
+        if os.path.exists('state_' + args.saved_model_path):
+            d = torch.load('state_' + args.saved_model_path)
+            optimizer.load_state_dict(d['optimizer'])
+            scheduler.load_state_dict(d['scheduler'])
+            start_e = d['e']
     return model, optimizer, scheduler, device
 
 
@@ -76,6 +88,8 @@ def train(model, dataset, optimizer, scheduler, device, args):
     total_iters = 0
     bs = []
     for e in range(args.epoch):
+        if e < start_e:
+            continue
         pe = 0
         dataset.shuffle()
         for i, batch in enumerate(tqdm.tqdm(dataset)):
@@ -96,8 +110,8 @@ def train(model, dataset, optimizer, scheduler, device, args):
             bs.append(batch)
             node_features = node_features.to(device)
             paired_nodes = list(range(node_features.shape[0]))
-            boxes, scores = model(node_features, leaves_embeds, paired_nodes, g)
-            loss = adaptive_BCE(paired_nodes, boxes, g, path_sim) + cls_loss(scores, paired_nodes, g)
+            boxes, scores, fs_pairs = model(node_features, leaves_embeds, paired_nodes, g)
+            loss = adaptive_BCE(paired_nodes, boxes, g, path_sim) + cls_loss(scores, paired_nodes, fs_pairs, g)
 
             # updating boxes storage
             if i + 1 in dataset.get_milestone():
@@ -107,7 +121,7 @@ def train(model, dataset, optimizer, scheduler, device, args):
                 for b in bs:
                     g, node_features, leaves_embeds, _, new_to_old, path_sim = b
                     with torch.no_grad():
-                        fused = model(node_features, leaves_embeds, paired_nodes, g).detach()
+                        fused = model(node_features, leaves_embeds, None, g).detach()
                 dataset.update_boxes(fused.squeeze(0), new_to_old)
                 model.change_mode()
                 model.train()
@@ -143,15 +157,21 @@ def train(model, dataset, optimizer, scheduler, device, args):
             else:
                 return
             scheduler.step()
+            # sum = torch.cuda.memory_summary(device=None, abbreviated=False)
+            # print(sum)
         bs = []
-        __test(dataset, model, metric, 'eval')
+        # torch.cuda.empty_cache()
+        res = __test(dataset, model, metric, 'eval', device)
+        for k, v in res.items():
+            writer.add_scalar(k, v, e)
         dataset.clear_boxes()
         checkpoint(args.saved_model_path, model)
-    __test(dataset, model, metric, 'test')
+        save_state('state_' + args.saved_model_path, scheduler, optimizer, e)
+    __test(dataset, model, metric, 'test', device)
     writer.close()
 
 
-def __test(dataset, model, metric, mode):
+def __test(dataset, model, metric, mode, device):
     assert mode in ('eval', 'test')
     print('{}....'.format(mode))
     metric.clear()
@@ -162,31 +182,48 @@ def __test(dataset, model, metric, mode):
     with torch.no_grad():
         for b in dataset:
             g, node_features, leaves_embeds, _, new_to_old, path_sim = b
-            fused = model(node_features, leaves_embeds, None, g).detach()
+            fused = model(node_features.to(device), leaves_embeds, None, g).detach()
             dataset.update_boxes(fused.squeeze(0), new_to_old)
         boxes = []
         new_to_old = []
-        old_to_new = [-1] * (max(dataset.train) + 1)
+        old_to_new = [-1] * (max(dataset.train) + 2)
         for k, v in dataset.fused_embeddings.items():
             old_to_new[k] = len(new_to_old)
             new_to_old.append(k)
             boxes.append(model.box_decoder(v.unsqueeze(0)))
         boxes = torch.cat(boxes)
+
+        old_to_new[-1] = len(new_to_old)
+        new_to_old.append(len(old_to_new) - 1)
+
+        dummy_box = torch.zeros(1, boxes.shape[-1]).to(boxes.device)
+        _boxes = torch.cat([boxes, dummy_box], dim=0)  # boxes: n * (n+1) * d
+        edge = torch.Tensor(list([[old_to_new[e[0]], old_to_new[e[1]]] for e in dataset._tree.edges()]))
+        edge_dummy = torch.Tensor(list([[old_to_new[n], old_to_new[-1]] for n in dataset._tree.nodes()]))
+        edge = torch.cat([edge, edge_dummy]).type(torch.long).to(device)
+        f = _boxes[edge[:, 0], :].unsqueeze(1)
+        s = _boxes[edge[:, 1], :].unsqueeze(1)
+
         old_to_new = torch.Tensor(old_to_new).type(torch.long)
         dataset.change_mode(mode)
         for n in tqdm.tqdm(dataset):
             node_feature, gt_path, idx = n
-            node_feature = node_feature.unsqueeze(0).to(boxes[0].device)
+            node_feature = node_feature.unsqueeze(0).to(boxes.device)
             feature = model.node_encoder(node_feature[:, 0, :], node_feature[:, 1, :].unsqueeze(0))
             box = model.decode_box(feature)
-            scores = model.scorer(box, boxes.unsqueeze(0)).view(boxes.shape[0])
-            metric.update(scores, gt_path, new_to_old, dataset._tree)
+            box = box.expand(f.shape)
+
+            scores = model.scorer(box, f, s).squeeze(1)
+
+            metric.update(scores, gt_path, new_to_old, old_to_new, dataset._tree, edge)
             # novel_in_c, s_in_f = test_entailment(boxes, box, dataset.fs_pairs, old_to_new)
             # metric.update((novel_in_c, s_in_f), gt_path, new_to_old, dataset._tree, dataset.fs_pairs)
     pprint.pprint(metric.show_results())
     dataset.change_mode('train')
     model.change_mode()
     model.train()
+    # torch.cuda.empty_cache()
+    return metric.show_results()
 
 
 def main(args):
@@ -209,7 +246,7 @@ def main(args):
         if os.path.exists(args.saved_model_path):
             model.load_state_dict(torch.load(args.saved_model_path))
         metric = TreeMetric()
-        __test(dataset, model, metric, 'test')
+        __test(dataset, model, metric, 'eval', device)
 
 
 if __name__ == '__main__':

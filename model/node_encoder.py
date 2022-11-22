@@ -5,6 +5,8 @@ import clip
 import torch.nn.functional as F
 from copy import deepcopy
 import numpy as np
+
+from utils.utils import hard_intersection
 from .module import Transformer
 from transformers import ViltModel, ViltConfig, BertConfig, BertModel
 from utils.graph_operate import transitive_closure_mat, adj_mat
@@ -174,7 +176,8 @@ class twinTransformer(torch.nn.Module):
 class MultimodalNodeEncoder(torch.nn.Module):
     def __init__(self, hidden_size, num_layers):
         super(MultimodalNodeEncoder, self).__init__()
-        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64, num_hidden_layers=num_layers)
+        self.config = ViltConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64,
+                                 num_hidden_layers=num_layers)
         self.vilt = ViltModel(self.config)
         self.cls_token = torch.nn.Parameter((torch.zeros(1, 1, 512)))
 
@@ -208,7 +211,7 @@ class StructuralFusionModule(torch.nn.Module):
 
         attention_mask = []
         batch_nodes = []
-        # adj_mats = []
+        fs_pairs = []
         if self.is_training:
             # construct batch, the order is same as paired node
             for n in paired_nodes:
@@ -222,9 +225,13 @@ class StructuralFusionModule(torch.nn.Module):
                     [node_feature_list[:n, ], node_feature_list[n + 1:, :]])
                 mat = transitive_closure_mat(_c_tree)  # (n-1) * (n-1)
                 attention_mask.append(self.generate_mask(mat))
-                # edge = torch.Tensor(list(_c_tree.edges()))
-                # edge[edge > n] -= 1
-                # adj_mats.append(edge.type(torch.long))
+
+                edge = torch.Tensor(list(_c_tree.edges()))
+                edge_dummy = torch.Tensor(list([[n, -1] for n in _c_tree.nodes()]))
+                edge = torch.cat([edge, edge_dummy])
+                edge[edge > n] -= 1
+                fs_pairs.append(edge.type(torch.long))
+
                 batch_nodes.append(selected_tree_nodes.unsqueeze(0))
 
             batch_nodes = torch.cat(batch_nodes)
@@ -233,12 +240,12 @@ class StructuralFusionModule(torch.nn.Module):
             res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
             fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']],
                               dim=1)
-            return fused  # fused: sep node and other nodes
+            return fused, fs_pairs  # fused: sep node and other nodes
             # fused shape: n * n * feature_dim
 
         else:
             mat = transitive_closure_mat(node_tree)
-            attention_mask = self.generate_mask(mat)
+            attention_mask = self.generate_mask(mat).to(node_feature_list.device)
             batch_nodes = node_feature_list.unsqueeze(0)
             res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
             return res['last_hidden_state']
@@ -274,15 +281,15 @@ class BoxDecoder(torch.nn.Module):
     def __init__(self, box_dim, hidden_size):
         super(BoxDecoder, self).__init__()
         self.box_dim = box_dim
-        self.project_box = torch.nn.Sequential(
+        self.project_box = [
             torch.nn.Linear(hidden_size, hidden_size // 2, dtype=torch.float32),
             torch.nn.Linear(hidden_size // 2, self.box_dim, dtype=torch.float32)
-        )
+        ]
         self.act = torch.nn.Sigmoid()
 
     def forward(self, x):
-        x = self.project_box(x)
-        x = self.act(x)
+        for module in self.project_box:
+            x = self.act(module(x))
 
         return x
 
@@ -290,15 +297,21 @@ class BoxDecoder(torch.nn.Module):
 class Scorer(torch.nn.Module):
     def __init__(self, box_dim, out_dim):
         super(Scorer, self).__init__()
-        self.w = torch.nn.Bilinear(box_dim, box_dim, out_dim)
-        self.v = torch.nn.Linear(2 * box_dim, out_dim)
-        self.classifier = torch.nn.Linear(out_dim, 1, bias=False)
+        # self.w = torch.nn.Bilinear(box_dim, 2 * box_dim, out_dim)
+        self.v = torch.nn.Linear(3 * box_dim, out_dim)
+        self.v2 = torch.nn.Linear(2 * box_dim, out_dim)
+        self.v3 = torch.nn.Linear(2 * box_dim, out_dim)
+        self.act = torch.nn.ReLU()
+        self.classifier = torch.nn.Linear(3 * out_dim, 1, bias=False)
 
-    def forward(self, q, f):
+    def forward(self, q, f, s):
         q = q.expand(f.shape)
+        # intersect = hard_intersection(q, f, True).expand(f.shape)
         # out = self.w(q, torch.cat([f, s], dim=-1)) + self.v(torch.cat([q, f, s], dim=-1))
-        out = self.w(q, f) + self.v(torch.cat([q, f], dim=-1))
-        out = torch.nn.Sigmoid()(self.classifier(out)).squeeze(-1)
+        out1 = self.act(self.v(torch.cat([q, f, s], dim=-1)))
+        out2 = self.act(self.v2(torch.cat([q, s], dim=-1)))
+        out3 = self.act(self.v3(torch.cat([f, q], dim=-1)))
+        out = torch.nn.Sigmoid()(self.classifier(torch.cat([out1, out2, out3], dim=-1))).squeeze(-1)
         return out
 
 
@@ -307,10 +320,10 @@ class TreeKiller(torch.nn.Module):
         super(TreeKiller, self).__init__()
         self.is_training = True
         # self.box_decoder = BoxDecoder(box_dim, hidden_size)
-        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 4)
-        self.node_encoder = MultimodalNodeEncoder(hidden_size, 12)
-        self.struct_encoder = StructuralFusionModule(hidden_size, 3)
-        self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 2)
+        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 3)
+        self.node_encoder = MultimodalNodeEncoder(hidden_size, 3)
+        self.struct_encoder = StructuralFusionModule(hidden_size, 6)
+        self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 4)
 
     def change_mode(self):
         self.is_training = not self.is_training
@@ -326,19 +339,35 @@ class TreeKiller(torch.nn.Module):
                 node_features[i] = emb
 
         # noted that the first index of fused_features is not fused
-
-        fused_features = self.struct_encoder(node_features, paired_nodes, tree)
-
-        if not self.is_training:
+        if self.is_training:
+            fused_features, fs_pairs = self.struct_encoder(node_features, paired_nodes, tree)
+        else:
+            fused_features = self.struct_encoder(node_features, paired_nodes, tree)
             return fused_features
 
         boxes = self.box_decoder(fused_features)
-        q = boxes[:, 0, :].unsqueeze(1)
-        # f = torch.cat([b[i[:, 0], :].unsqueeze(0) for b, i in zip(boxes[1:, 1:, :], fs_pairs[1:])])
-        # s = torch.cat([b[i[:, 1], :].unsqueeze(0) for b, i in zip(boxes[1:, 1:, :], fs_pairs[1:])])
-        scores = self.scorer(q, boxes[:, 1:, :])
 
-        return boxes, scores
+        dummy_box = torch.zeros(boxes.shape[0], 1, boxes.shape[-1]).to(boxes.device)
+        _boxes = torch.cat([boxes, dummy_box], dim=1)  # boxes: n * (n+1) * d
+        q = _boxes[:, 0, :].unsqueeze(1)  # n * 1 * d
+        k = _boxes[:, 1:, :]  # n * n * d
+
+        ignore = -1
+        for i, p in enumerate(paired_nodes):
+            if len(list(tree.predecessors(p))) == 0:
+                ignore = i
+                break
+
+        fs_pairs = fs_pairs[:ignore] + fs_pairs[ignore + 1:]
+        q = torch.cat([q[:ignore], q[ignore + 1:]])
+        k = torch.cat([k[:ignore], k[ignore + 1:]])
+
+        f = torch.cat([b[i[:, 0], :].unsqueeze(0) for b, i in zip(k, fs_pairs)])
+        s = torch.cat([b[i[:, 1], :].unsqueeze(0) for b, i in zip(k, fs_pairs)])
+
+        scores = self.scorer(q, f, s)
+
+        return boxes, scores, fs_pairs
 
 
 if __name__ == "__main__":

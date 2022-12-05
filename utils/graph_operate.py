@@ -160,7 +160,8 @@ def test_entailment(boxes, novel_box, fs_pairs, old_to_new):
 
 def transitive_closure_mat(g):
     trans_c = nx.transitive_closure(g, reflexive=True)
-    return nx.adjacency_matrix(trans_c).toarray()
+    trans_mat = nx.adjacency_matrix(trans_c).toarray()
+    return trans_mat
 
 
 def adj_mat(g):

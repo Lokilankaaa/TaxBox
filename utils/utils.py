@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, List
 from PIL import Image
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm, kurtosis
@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import multiprocessing as mp
 from itertools import combinations
 import math
+from typing import Union
 
 EPS = 1e-13
 
@@ -70,7 +71,7 @@ def checkpoint(path_to_save, model):
 
 def save_state(path_to_save, scheduler, optimizer, e):
     print("saving training state to " + path_to_save)
-    torch.save({'scheduler': scheduler.state_dict(), 'optimizer': optimizer.state_dict(), 'e': e}, path_to_save)
+    torch.save({ 'optimizer': optimizer.state_dict(), 'e': e}, path_to_save)
 
 
 def id_to_ascendants(_id, id_to_father):
@@ -261,7 +262,7 @@ def softplus(x, t):
 def soft_volume(x: torch.Tensor, t=10, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
-    assert x.dim() == 2
+    # assert x.dim() == 2
     z, Z = x.chunk(2, -1)
     if box_mode:
         box_length = Z - z
@@ -339,7 +340,7 @@ def conditional_prob(x, y, box_mode=True):
         -1).clamp(min=EPS)
 
 
-def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, list[str]], label, device):
+def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, List[str]], label, device):
     # if label in ['flower', 'shirt', 'banana', 'watermelon', 'apple', 'cat']:
     #     return
     inputs = []

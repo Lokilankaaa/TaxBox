@@ -6,12 +6,52 @@ import torch.nn.functional as F
 from copy import deepcopy
 import numpy as np
 
-from utils.utils import hard_intersection
+from utils.utils import hard_intersection, conditional_prob
 from .module import Transformer
 from transformers import ViltModel, ViltConfig, BertConfig, BertModel
 from utils.graph_operate import transitive_closure_mat, adj_mat
 from utils.loss import adaptive_BCE
 from torch import nn
+
+
+class TMN(nn.Module):
+    def __init__(self, l_dim, r_dim, k=5, non_linear=nn.LeakyReLU(0.2)):
+        # def __init__(self, l_dim, r_dim, k=5, non_linear=nn.Tanh()):
+        super(TMN, self).__init__()
+
+        self.u = nn.Linear(k * 3, 1, bias=False)
+        self.u_l = nn.Linear(k, 1, bias=False)
+        self.u_r = nn.Linear(k, 1, bias=False)
+        self.u_e = nn.Linear(k, 1, bias=False)
+        self.f = non_linear  # if GNN/LSTM encoders are used, tanh should not, because they are not compatible
+        self.W_l = nn.Bilinear(l_dim, r_dim, k, bias=True)
+        self.W_r = nn.Bilinear(l_dim, r_dim, k, bias=True)
+        self.W = nn.Bilinear(l_dim * 2, r_dim, k, bias=True)
+        self.V_l = nn.Linear(l_dim + r_dim, k, bias=False)
+        self.V_r = nn.Linear(l_dim + r_dim, k, bias=False)
+        self.V = nn.Linear(l_dim * 2 + r_dim, k, bias=False)
+
+        self.control = nn.Sequential(nn.Linear(l_dim * 2 + r_dim, l_dim * 2, bias=False), nn.Sigmoid())
+        self.control_l = nn.Sequential(nn.Linear(l_dim + r_dim, l_dim, bias=False), nn.Sigmoid())
+        self.control_r = nn.Sequential(nn.Linear(l_dim + r_dim, l_dim, bias=False), nn.Sigmoid())
+
+    def forward(self, q, e1, e2):
+        q = q.expand(e1.shape)
+        ec1 = e1 * self.control_l(torch.cat((e1, q), -1))
+        ec2 = e2 * self.control_r(torch.cat((e2, q), -1))
+        e = torch.cat((e1, e2), -1)
+        ec = e * self.control(torch.cat((e, q), -1))
+        l = self.W_l(ec1, q) + self.V_l(torch.cat((ec1, q), -1))
+        r = self.W_r(ec2, q) + self.V_r(torch.cat((ec2, q), -1))
+        e = self.W(ec, q) + self.V(torch.cat((ec, q), -1))
+        l_scores = self.u_l(self.f(l))
+        r_scores = self.u_r(self.f(r))
+        e_scores = self.u_e(self.f(e))
+        scores = self.u(self.f(torch.cat((e.detach(), l.detach(), r.detach()), -1)))
+        if self.training:
+            return nn.Sigmoid()(scores), nn.Sigmoid()(l_scores), nn.Sigmoid()(r_scores), nn.Sigmoid()(e_scores)
+        else:
+            return nn.Sigmoid()(scores)
 
 
 class NodeEncoder(torch.nn.Module):
@@ -196,7 +236,7 @@ class StructuralFusionModule(torch.nn.Module):
         super(StructuralFusionModule, self).__init__()
         self.cfg = BertConfig(hidden_size=hidden_size, num_attention_heads=hidden_size // 64,
                               num_hidden_layers=num_layers, max_position_embeddings=512)
-        self.fusion = BertModel(self.cfg)
+        # self.fusion = BertModel(self.cfg)
         self.is_training = True
 
     def change_mode(self):
@@ -229,6 +269,7 @@ class StructuralFusionModule(torch.nn.Module):
                 edge = torch.Tensor(list(_c_tree.edges()))
                 edge_dummy = torch.Tensor(list([[n, -1] for n in _c_tree.nodes()]))
                 edge = torch.cat([edge, edge_dummy])
+                # edge = edge_dummy
                 edge[edge > n] -= 1
                 fs_pairs.append(edge.type(torch.long))
 
@@ -237,8 +278,8 @@ class StructuralFusionModule(torch.nn.Module):
             batch_nodes = torch.cat(batch_nodes)
             # attention_mask shape: n * n * n
             attention_mask = torch.cat(attention_mask).to(batch_nodes.device)
-            res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
-            fused = torch.cat([node_feature_list.unsqueeze(1), res['last_hidden_state']],
+            # res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+            fused = torch.cat([node_feature_list.unsqueeze(1), batch_nodes],
                               dim=1)
             return fused, fs_pairs  # fused: sep node and other nodes
             # fused shape: n * n * feature_dim
@@ -247,8 +288,8 @@ class StructuralFusionModule(torch.nn.Module):
             mat = transitive_closure_mat(node_tree)
             attention_mask = self.generate_mask(mat).to(node_feature_list.device)
             batch_nodes = node_feature_list.unsqueeze(0)
-            res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
-            return res['last_hidden_state']
+            # res = self.fusion(inputs_embeds=batch_nodes, attention_mask=attention_mask, return_dict=True)
+            return batch_nodes  # res['last_hidden_state']
 
 
 class HighwayNetwork(nn.Module):
@@ -274,7 +315,7 @@ class HighwayNetwork(nn.Module):
             gate_values = self.sigmoid(self.gate[layer_idx](inputs))
             nonlinear = self.activation(self.nonlinear[layer_idx](inputs))
             inputs = gate_values * nonlinear + (1. - gate_values) * inputs
-        return self.final_linear_layer(inputs)
+        return self.sigmoid(self.final_linear_layer(inputs))
 
 
 class BoxDecoder(torch.nn.Module):
@@ -294,36 +335,82 @@ class BoxDecoder(torch.nn.Module):
         return x
 
 
+def NaiveScorer(q, f, s):
+    # joint_fs = hard_intersection(f, s, True)
+    # prob_q_given_fs = conditional_prob(q, joint_fs, True)
+    prob_f_given_q = conditional_prob(f, q, True)
+    prob_q_given_s = conditional_prob(q, s, True)
+    prob_q_given_f = conditional_prob(q, f, True)
+    return prob_f_given_q * prob_q_given_s * prob_q_given_f
+
+
 class Scorer(torch.nn.Module):
-    def __init__(self, box_dim, out_dim):
+    def __init__(self, box_dim, inter_dim=20):
         super(Scorer, self).__init__()
+        k = inter_dim
         # self.w = torch.nn.Bilinear(box_dim, 2 * box_dim, out_dim)
-        self.v = torch.nn.Linear(3 * box_dim, out_dim)
-        self.v2 = torch.nn.Linear(2 * box_dim, out_dim)
-        self.v3 = torch.nn.Linear(2 * box_dim, out_dim)
+        self.p0 = torch.nn.Linear(box_dim, k)
+        self.p1 = torch.nn.Linear(3 * box_dim, k)
+        self.p2 = torch.nn.Linear(2 * box_dim, k)
+        self.p3 = torch.nn.Linear(2 * box_dim, k)
+
+        self.w1 = torch.nn.Bilinear(k, k, k // 2)
+        self.w2 = torch.nn.Bilinear(k, k, k // 2)
+        self.w3 = torch.nn.Bilinear(k, k, k // 2)
+        self.v1 = torch.nn.Linear(2 * k, k // 2)
+        self.v2 = torch.nn.Linear(2 * k, k // 2)
+        self.v3 = torch.nn.Linear(2 * k, k // 2)
+
         self.act = torch.nn.ReLU()
-        self.classifier = torch.nn.Linear(3 * out_dim, 1, bias=False)
+        self.classifier1 = torch.nn.Linear(3 * k // 2, 1, bias=False)
+        self.classifier2 = torch.nn.Linear(k // 2, 1, bias=False)
+        self.classifier3 = torch.nn.Linear(k // 2, 1, bias=False)
 
     def forward(self, q, f, s):
         q = q.expand(f.shape)
+        # f_in_q = conditional_prob(q, f, True).unsqueeze(-1)
+        # q_in_f = conditional_prob(f, q, True).unsqueeze(-1)
+        # s_in_q = conditional_prob(q, s, True).unsqueeze(-1)
+        # q_in_s = conditional_prob(s, q, True).unsqueeze(-1)
+
+        _q = self.act(self.p0(q))
+        _all = self.act(self.p1(torch.cat([q, f, s], dim=-1)))
+        _f = self.act(self.p2(torch.cat([q, f], dim=-1)))
+        _s = self.act(self.p2(torch.cat([q, s], dim=-1)))
+
+        e1 = torch.cat([_all], dim=-1)
+        e2 = torch.cat([_f], dim=-1)
+        e3 = torch.cat([_s], dim=-1)
+        _all = self.w1(_q, e1) + self.v1(torch.cat([_q, e1], dim=-1))
+        _f = self.w2(_q, e2) + self.v2(torch.cat([_q, e2], dim=-1))
+        _s = self.w3(_q, e3) + self.v3(torch.cat([_q, e3], dim=-1))
+
+        s1 = torch.nn.Sigmoid()(self.classifier1(torch.cat([_all, _f, _s], dim=-1)))
+        s2 = torch.nn.Sigmoid()(self.classifier2(_f))
+        s3 = torch.nn.Sigmoid()(self.classifier3(_s))
+
         # intersect = hard_intersection(q, f, True).expand(f.shape)
         # out = self.w(q, torch.cat([f, s], dim=-1)) + self.v(torch.cat([q, f, s], dim=-1))
-        out1 = self.act(self.v(torch.cat([q, f, s], dim=-1)))
-        out2 = self.act(self.v2(torch.cat([q, s], dim=-1)))
-        out3 = self.act(self.v3(torch.cat([f, q], dim=-1)))
-        out = torch.nn.Sigmoid()(self.classifier(torch.cat([out1, out2, out3], dim=-1))).squeeze(-1)
-        return out
+        # f_all = self.act(self.v1(torch.cat([q, f, s], dim=-1)))
+        # f_s = self.act(self.v2(torch.cat([q, s], dim=-1)))
+        # f_f = self.act(self.v3(torch.cat([q, f], dim=-1)))
+        #
+        # out = torch.nn.Sigmoid()(self.classifier(torch.cat([out1, out2, out3], dim=-1))).squeeze(-1)
+        return s1, s2, s3
 
 
 class TreeKiller(torch.nn.Module):
-    def __init__(self, box_dim, hidden_size, out_dim=None):
+    def __init__(self, box_dim, hidden_size, out_dim=20):
         super(TreeKiller, self).__init__()
         self.is_training = True
         # self.box_decoder = BoxDecoder(box_dim, hidden_size)
-        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 3)
-        self.node_encoder = MultimodalNodeEncoder(hidden_size, 3)
-        self.struct_encoder = StructuralFusionModule(hidden_size, 6)
-        self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 4)
+        self.box_decoder_q = HighwayNetwork(hidden_size, box_dim, 3)
+        self.box_decoder_k = HighwayNetwork(hidden_size, box_dim, 3)
+        self.node_encoder = MultimodalNodeEncoder(hidden_size, 9)
+        self.struct_encoder = StructuralFusionModule(hidden_size, 3)
+        # self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 5)
+        self.scorer = NaiveScorer
+        # self.scorer = TMN(box_dim, box_dim)
 
     def change_mode(self):
         self.is_training = not self.is_training
@@ -334,9 +421,9 @@ class TreeKiller(torch.nn.Module):
 
     def forward(self, node_feature_list, leaves_embeds, paired_nodes, tree):
         node_features = self.node_encoder(node_feature_list[:, 0, :], node_feature_list[:, 1:, :])
-        if len(leaves_embeds) != 0:
-            for i, emb in leaves_embeds.items():
-                node_features[i] = emb
+        # if len(leaves_embeds) != 0:
+        #     for i, emb in leaves_embeds.items():
+        #         node_features[i] = emb
 
         # noted that the first index of fused_features is not fused
         if self.is_training:
@@ -345,12 +432,14 @@ class TreeKiller(torch.nn.Module):
             fused_features = self.struct_encoder(node_features, paired_nodes, tree)
             return fused_features
 
-        boxes = self.box_decoder(fused_features)
+        q_box = self.box_decoder_q(fused_features[:, 0, :].unsqueeze(1))
+        k_boxes = self.box_decoder_k(fused_features[:, 1:, :])
+        boxes = torch.cat([q_box, k_boxes], dim=1)
 
-        dummy_box = torch.zeros(boxes.shape[0], 1, boxes.shape[-1]).to(boxes.device)
-        _boxes = torch.cat([boxes, dummy_box], dim=1)  # boxes: n * (n+1) * d
-        q = _boxes[:, 0, :].unsqueeze(1)  # n * 1 * d
-        k = _boxes[:, 1:, :]  # n * n * d
+        dummy_box = torch.zeros_like(q_box).to(q_box.device)
+        _boxes = torch.cat([k_boxes, dummy_box], dim=1)  # boxes: n * (n+1) * d
+        q = q_box  # n * 1 * d
+        k = _boxes  # n * n * d
 
         ignore = -1
         for i, p in enumerate(paired_nodes):
@@ -368,6 +457,32 @@ class TreeKiller(torch.nn.Module):
         scores = self.scorer(q, f, s)
 
         return boxes, scores, fs_pairs
+
+
+class TMNModel(torch.nn.Module):
+    def __init__(self, box_dim, hidden_size):
+        super(TMNModel, self).__init__()
+        self.embedding = None
+        # self.proj = HighwayNetwork(hidden_size, box_dim, 3)
+        self.proj = MultimodalNodeEncoder(hidden_size, 9)
+
+        self.match = TMN(hidden_size, hidden_size)
+
+    def set_embedding(self, embs):
+        embs = torch.nn.functional.normalize(embs, p=2, dim=-1)
+        self.embedding = torch.nn.Embedding.from_pretrained(embs, freeze=True)
+
+    def forward(self, x, f, s):
+        if self.embedding is not None:
+            x = self.embedding(x)
+            f = self.embedding(f)
+            s = self.embedding(s)
+        x = self.proj(x[:, 0, :], x[:, 1:, :])
+        f = self.proj(f[:, 0, :], f[:, 1:, :])
+        s = self.proj(s[:, 0, :], s[:, 1:, :])
+        return self.match(x, f, s)
+
+# class
 
 
 if __name__ == "__main__":

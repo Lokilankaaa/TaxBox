@@ -7,6 +7,8 @@ class TreeMetric:
         self.acc = []
         self.ranks = []
         self.wp = []
+        self.hit10 = []
+        self.hit5 = []
 
     def clear(self):
         self.acc = []
@@ -38,7 +40,9 @@ class TreeMetric:
         }
 
     def update(self, scores, gt, new_to_old, old_to_new, graph, fs_pairs):
-        #scores, fs_pairs: 2n - 1
+        # scores, fs_pairs: 2n - 1
+        if scores.dim() == 2:
+            scores = scores.squeeze(1)
         gt = list([i for i in gt if i in new_to_old]) + [gt[-1]]
         ranks = list([new_to_old[fs_pairs[new_id, 0].item()] for new_id in scores.topk(scores.shape[0])[1]])
         top10 = ranks[:10]
@@ -68,3 +72,5 @@ class TreeMetric:
     # self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))
     # self.ranks.append(sort_pred.index(gt[-2]) + 1)
     # self.mean_prob.append(pred[self.ranks[-1] - 1].cpu().numpy())
+
+

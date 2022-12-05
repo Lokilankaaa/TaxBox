@@ -1,4 +1,5 @@
 import os
+import random
 from itertools import combinations
 from random import shuffle
 
@@ -19,6 +20,7 @@ class TreeSet(Dataset):
         self.mode = 'train'
         self.whole = whole
         self.train = train
+        # self.train.remove(0)
         self.eva = eva
         self.test = test
         self._tree = G
@@ -42,6 +44,7 @@ class TreeSet(Dataset):
         self.fused_embeddings = {}
         self.path_sim_matrix = None
         self.fs_pairs = []
+        self.node2pairs = {}
 
         self._init()
         self._process()
@@ -140,6 +143,10 @@ class TreeSet(Dataset):
         self._stats()
         self._form_mini_batches()
         self.generate_fs_pairs()
+        self.generate_node2pairs()
+
+    def generate_node2pairs(self):
+        pass
 
     def _check_saved(self):
         return os.path.exists('tree_data.pt') and os.path.exists('path_sim_maj.pt')
@@ -161,6 +168,8 @@ class TreeSet(Dataset):
 
         if self._check_saved():
             self._database = torch.load('tree_data.pt')
+            for i in self._database.keys():
+                self._database[i] = torch.nn.functional.normalize(self._database[i].float(), p=2, dim=-1)
             self.path_sim_matrix = torch.load('path_sim_maj.pt')
 
             # import clip
@@ -227,9 +236,15 @@ class TreeSet(Dataset):
             return len(self.test)
 
     def shuffle(self):
-        if len(self.fetch_order) != 0:
-            for l in self.fetch_order:
-                shuffle(l)
+        if self.mode == 'train':
+            if len(self.fetch_order) != 0:
+                for l in self.fetch_order:
+                    shuffle(l)
+        elif self.mode == 'eval':
+            shuffle(self.eva)
+
+        elif self.mode == 'test':
+            shuffle(self.test)
 
     def distance(self, a, b):
         return nx.shortest_path_length(self._undigraph, a, b)
@@ -262,12 +277,47 @@ class TreeSet(Dataset):
             res.append(res[-1] + len(l))
         return res[1:-1]
 
+    def sample_train_pairs(self, q, num, pos_num=1):
+        _f = list(self._tree.predecessors(q))[0]
+        _s = list(self._tree.successors(q)) + [-1]
+        pos = list([[_f, s] for s in _s])
+        pos = [random.choice(pos)]
+        neg = [e for e in self._tree.edges if e[0] != q and e[1] != q and e not in pos]
+        remain = num - len(pos)
+        if remain > 0:
+            rest = random.sample(neg, remain) + pos
+        else:
+            rest = random.sample(pos, num)
+        labels = []
+        for r in rest:
+            l = [0, 0, 0]
+            if r[0] == _f:
+                l[1] = 1
+            if r[1] in _s:
+                l[2] = 1
+            l[0] = l[1] * l[2]
+            labels.append(l)
+        return torch.Tensor(rest), torch.Tensor(labels)
+
     def __getitem__(self, idx):
         if self.mode == 'eval':
-            return self._database[self.eva[idx]], nx.shortest_path(self.whole, 0, self.eva[idx]), self.eva[idx]
+            return self._database[self.eva[idx]].float(), nx.shortest_path(
+                self.whole, 0, self.eva[idx]), self.eva[idx]
         if self.mode == 'test':
-            return self._database[self.test[idx]], nx.shortest_path(self.whole, 0, self.test[idx]), self.test[idx]
+            return self._database[self.test[idx]].float(), nx.shortest_path(
+                self.whole, 0, self.test[idx]), self.test[idx]
 
+        # q = self.train[idx]
+        # pairs, labels = self.sample_train_pairs(q, 10)
+        # eq = self._database[q].unsqueeze(0)
+        # embeds = []
+        # for p in pairs:
+        #     f = self._database[p[0].item()].unsqueeze(0)
+        #     s = self._database[p[1].item()].unsqueeze(0) if p[1] != -1 else torch.zeros_like(f)
+        #     embeds.append(torch.cat([eq, f, s]).unsqueeze(0))
+        #
+        # embeds = torch.cat(embeds).float()
+        # return embeds, torch.Tensor(labels)
         l = []
         for _ in self.fetch_order:
             l += _

@@ -14,6 +14,46 @@ import pprint
 import networkx as nx
 from pyvis.network import Network
 from queue import Queue
+import torch
+
+
+def mkdataset_tmn(path_meta, path_data, dir):
+    d = torch.load(path_meta)
+    whole, g, names, descriptions, train, eva, test = d['whole'], d['g'], d['names'], d['descriptions'], d['train'], d[
+        'eva'], d['test']
+    embeddings = torch.load(path_data)
+    terms_dir = os.path.join(dir, 'wn.terms')
+    taxo_dir = os.path.join(dir, 'wn.taxo')
+    embed_dir = os.path.join(dir, 'wn.terms.clip.embed')
+    train_dir = os.path.join(dir, 'wn.terms.train')
+    val_dir = os.path.join(dir, 'wn.terms.validation')
+    test_dir = os.path.join(dir, 'wn.terms.test')
+
+    with open(terms_dir, 'w') as f:
+        for n in train + test + eva:
+            f.write(str(n) + '\t' + names[n] + '\n')
+
+    with open(taxo_dir, 'w') as f:
+        for e in whole.edges():
+            f.write('{}\t{}\n'.format(e[0], e[1]))
+
+    with open(embed_dir, 'w') as f:
+        f.write('{} {}\n'.format(len(names), 512))
+        for n in train + test + eva:
+            line = str(n) + ' ' + ' '.join(map(lambda x: str(x), embeddings[n][0].numpy().tolist())) + '\n'
+            f.write(line)
+
+    with open(train_dir, 'w') as f:
+        for n in train:
+            f.write(str(n) + '\n')
+
+    with open(val_dir, 'w') as f:
+        for n in eva:
+            f.write(str(n) + '\n')
+
+    with open(test_dir, 'w') as f:
+        for n in test:
+            f.write(str(n) + '\n')
 
 
 def extract_tree_from_imagenet(word_path, imagenet_path, save=True):
@@ -387,13 +427,15 @@ if __name__ == '__main__':
     # con = [k for k, _ in dt.items() if k in imagenet_labels]
     # print(len(con), con)
     # print(len(dt))
-    whole_g, G, names, descriptions, train, test, eva = split_tree_dataset(
-        '/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
-    print(len(train), len(test), len(eva), len(names))
-    import torch
-
-    torch.save({'whole': whole_g,
-                'g': G, 'names': names, 'descriptions': descriptions, 'train': train, 'test': test, 'eva': eva
-                }, 'imagenet_dataset.pt')
+    # whole_g, G, names, descriptions, train, test, eva = split_tree_dataset(
+    #     '/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
+    # print(len(train), len(test), len(eva), len(names))
+    # import torch
+    #
+    # torch.save({'whole': whole_g,
+    #             'g': G, 'names': names, 'descriptions': descriptions, 'train': train, 'test': test, 'eva': eva
+    #             }, 'imagenet_dataset.pt')
     # from datasets_torch.treeset import TreeSet
     # t = TreeSet(G, names, descriptions)
+    mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
+                  '/data/home10b/xw/visualCon/TMN-main/data/mywn')

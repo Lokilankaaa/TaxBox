@@ -118,99 +118,99 @@ def tmnloss(scores, l):
     return loss_fn(s1, l[:, 0]) + loss_fn(s2, l[:, 1]) + loss_fn(s3, l[:, 2]) + loss_fn(s4, l[:, 0])
 
 
-def cls_loss(scores, paired_nodes, fs_pairs, tree):
-    sample_num = 10
-    # the order of the batch of scores is same as paired_nodes
-    s1 = scores
-    if s1.dim() == 3:
-        s1 = s1.squeeze(-1)
-        # s2 = s2.squeeze(-1)
-        # s3 = s3.squeeze(-1)
-        # s4 = s4.squeeze(-1)
-
-    trans_mat = transitive_closure_mat(tree)
-    trans_mat -= np.diag([1] * trans_mat.shape[0])
-
-    gt_labels = []
-    reserved = []
-    ignore = -1
-    for i in paired_nodes:
-        if len(list(tree.predecessors(i))) == 0:
-            ignore = i
-            continue
-        else:
-            reach = np.where(trans_mat[:, i] == 1)[0]
-            reach_inv = np.where(trans_mat[i, :] == 1)[0]
-            reach[reach > i] -= 1
-            reach_inv[reach_inv > i] -= 1
-            _f = list(tree.predecessors(i))[0]
-            _s = list(tree.successors(i))
-            edge = torch.Tensor(list([[_f, s] for s in _s] + [[_f, -1]]) if len(_s) != 0 else torch.Tensor([[_f, -1]]))
-            edge[edge > i] -= 1
-            gt_label = torch.Tensor([0] * s1.shape[-1]).type(torch.float)
-
-            if ignore != -1 and i > ignore:
-                i -= 1
-            for e in edge:
-                id0 = (fs_pairs[i][:, 0] - e[0]) == 0
-                id1 = (fs_pairs[i][:, 1] - e[1]) == 0
-                gt_label[id0 * id1] = 1
-            # for e in reach:
-            #     id0 = fs_pairs[i][:, 0] == e
-            #     gt_label[id0, 1] = 1
-            # for e in reach_inv:
-            #     id0 = fs_pairs[i][:, 1] == e
-            #     gt_label[id0, 2] = 1
-            #
-            if gt_label.shape[0] > sample_num:
-                drop = gt_label == 0
-                reserve = torch.zeros_like(drop).bool()
-                reserve_idx = random.choice(torch.where(torch.logical_not(drop))[0])
-                reserve[reserve_idx] = True
-                drop_idx = torch.where(drop)[0].numpy().tolist()
-                num_drop = len(drop_idx)
-                remain_num = 1
-                if sample_num > remain_num:
-                    rest_sample = random.sample(drop_idx, sample_num - remain_num)
-                else:
-                    reserve_idx = torch.where(torch.logical_not(drop))[0].numpy().tolist()
-                    rest_sample = random.sample(reserve_idx, sample_num)
-
-                reserve[rest_sample] = True
-                reserved.append(reserve.unsqueeze(0))
-
-            gt_labels.append(gt_label.unsqueeze(0))
-    gt_labels = torch.cat(gt_labels).to(s1.device)  # n-1 * 2n - 3
-    if len(reserved) > 0:
-        reserved = torch.cat(reserved).to(s1.device).type(torch.bool)
-    else:
-        reserved = torch.ones_like(s1).to(s1.device).type(torch.bool)
-    not_labels = torch.logical_not(gt_labels)
-
-    # exp_scores = torch.exp(scores)
-    exp_scores = scores
-
-    pos = (exp_scores[reserved] * gt_labels[reserved]).sum(-1)
-    neg = (exp_scores[reserved] * not_labels[reserved]).sum(-1)
-
-    loss = -torch.log(pos / (pos + neg))
-    # loss = -torch.log(pos / exp_scores.sum(-1))
-    return loss.mean()
-    # loss_fn = torch.nn.BCELoss()
-    # return loss_fn(s1[reserved], gt_labels.float()[:, :, 0][reserved])
-           # loss_fn(s2[reserved], gt_labels.float()[:, :, 1][reserved]) + \
-           # loss_fn(s3[reserved], gt_labels.float()[:, :, 2][reserved])
-           # loss_fn(s4[reserved], gt_labels.float()[:, :, 0][reserved])
-
-    #     f = list(tree.predecessors(i))[0]
-    #     gt_labels.append(f if f < i else f - 1)
-    # scores = torch.cat([scores[:ignore], scores[ignore + 1:]])
-    # gt_labels = torch.Tensor(gt_labels).type(torch.long).to(scores.device)
-    # return torch.nn.CrossEntropyLoss()(scores, gt_labels)
+# def cls_loss(scores, paired_nodes, fs_pairs, tree):
+#     sample_num = 10
+#     # the order of the batch of scores is same as paired_nodes
+#     s1 = scores
+#     if s1.dim() == 3:
+#         s1 = s1.squeeze(-1)
+#         # s2 = s2.squeeze(-1)
+#         # s3 = s3.squeeze(-1)
+#         # s4 = s4.squeeze(-1)
+#
+#     trans_mat = transitive_closure_mat(tree)
+#     trans_mat -= np.diag([1] * trans_mat.shape[0])
+#
+#     gt_labels = []
+#     reserved = []
+#     ignore = -1
+#     for i in paired_nodes:
+#         if len(list(tree.predecessors(i))) == 0:
+#             ignore = i
+#             continue
+#         else:
+#             reach = np.where(trans_mat[:, i] == 1)[0]
+#             reach_inv = np.where(trans_mat[i, :] == 1)[0]
+#             reach[reach > i] -= 1
+#             reach_inv[reach_inv > i] -= 1
+#             _f = list(tree.predecessors(i))[0]
+#             _s = list(tree.successors(i))
+#             edge = torch.Tensor(list([[_f, s] for s in _s] + [[_f, -1]]) if len(_s) != 0 else torch.Tensor([[_f, -1]]))
+#             edge[edge > i] -= 1
+#             gt_label = torch.Tensor([0] * s1.shape[-1]).type(torch.float)
+#
+#             if ignore != -1 and i > ignore:
+#                 i -= 1
+#             for e in edge:
+#                 id0 = (fs_pairs[i][:, 0] - e[0]) == 0
+#                 id1 = (fs_pairs[i][:, 1] - e[1]) == 0
+#                 gt_label[id0 * id1] = 1
+#             # for e in reach:
+#             #     id0 = fs_pairs[i][:, 0] == e
+#             #     gt_label[id0, 1] = 1
+#             # for e in reach_inv:
+#             #     id0 = fs_pairs[i][:, 1] == e
+#             #     gt_label[id0, 2] = 1
+#             #
+#             if gt_label.shape[0] > sample_num:
+#                 drop = gt_label == 0
+#                 reserve = torch.zeros_like(drop).bool()
+#                 reserve_idx = random.choice(torch.where(torch.logical_not(drop))[0])
+#                 reserve[reserve_idx] = True
+#                 drop_idx = torch.where(drop)[0].numpy().tolist()
+#                 num_drop = len(drop_idx)
+#                 remain_num = 1
+#                 if sample_num > remain_num:
+#                     rest_sample = random.sample(drop_idx, sample_num - remain_num)
+#                 else:
+#                     reserve_idx = torch.where(torch.logical_not(drop))[0].numpy().tolist()
+#                     rest_sample = random.sample(reserve_idx, sample_num)
+#
+#                 reserve[rest_sample] = True
+#                 reserved.append(reserve.unsqueeze(0))
+#
+#             gt_labels.append(gt_label.unsqueeze(0))
+#     gt_labels = torch.cat(gt_labels).to(s1.device)  # n-1 * 2n - 3
+#     if len(reserved) > 0:
+#         reserved = torch.cat(reserved).to(s1.device).type(torch.bool)
+#     else:
+#         reserved = torch.ones_like(s1).to(s1.device).type(torch.bool)
+#     not_labels = torch.logical_not(gt_labels)
+#
+#     # exp_scores = torch.exp(scores)
+#     exp_scores = scores
+#
+#     pos = (exp_scores[reserved] * gt_labels[reserved]).sum(-1)
+#     neg = (exp_scores[reserved] * not_labels[reserved]).sum(-1)
+#
+#     loss = -torch.log(pos / (pos + neg))
+#     # loss = -torch.log(pos / exp_scores.sum(-1))
+#     return loss.mean()
+#     # loss_fn = torch.nn.BCELoss()
+#     # return loss_fn(s1[reserved], gt_labels.float()[:, :, 0][reserved])
+#            # loss_fn(s2[reserved], gt_labels.float()[:, :, 1][reserved]) + \
+#            # loss_fn(s3[reserved], gt_labels.float()[:, :, 2][reserved])
+#            # loss_fn(s4[reserved], gt_labels.float()[:, :, 0][reserved])
+#
+#     #     f = list(tree.predecessors(i))[0]
+#     #     gt_labels.append(f if f < i else f - 1)
+#     # scores = torch.cat([scores[:ignore], scores[ignore + 1:]])
+#     # gt_labels = torch.Tensor(gt_labels).type(torch.long).to(scores.device)
+#     # return torch.nn.CrossEntropyLoss()(scores, gt_labels)
 
 
 def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
-    path_sim = path_sim / 1.5
+    path_sim = path_sim / 1
     epsilon = torch.Tensor([1e-8]).to(b_boxes.device)
     trans_clo_maj = torch.Tensor(transitive_closure_mat(tree)).type(torch.bool).to(b_boxes.device)
 
@@ -259,3 +259,59 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
 
     res = v_f(b_boxes, reaches, reaches_inv, sims, sims_inv)
     return res.mean() + regularization_loss(b_boxes.reshape(-1, b_boxes.shape[-1]))
+
+
+def insertion_loss(scores, labels):
+    s1 = scores
+    if s1.dim() == 2:
+        s1 = s1.squeeze(-1)
+    loss_fn = torch.nn.BCELoss()
+
+    return loss_fn(s1, labels[:, 0])  # + loss_fn(s2, labels[:, 1]) + loss_fn(s3, labels[:, 2])
+
+
+def attachment_loss(scores, labels):
+    s1 = scores
+    if s1.dim() == 2:
+        s1 = s1.squeeze(-1)
+        # r1 = r1.squeeze(-1)
+    loss_fn = torch.nn.BCELoss()
+    return loss_fn(s1, labels[:, 0])# + (labels[:, 0] * (r1 < 0) * r1.abs()).mean()
+
+
+def box_constraint_loss(boxes, sims, reaches):
+    # box: b * 3 * d, labels: b * 3, sims: b * 2
+    sims = sims / 2
+    q, p, c = boxes.chunk(3, 1)
+    q, p, c = q.squeeze(1), p.squeeze(1), c.squeeze(1)
+    loss = torch.zeros_like(q[:, 0])
+
+    def _not_in_(a, b, sim, com=False):
+        epsilon = 1e-8
+        probs = conditional_prob(b, a, True)
+        return torch.max(torch.zeros_like(a[:, 0]),
+                         -torch.log(1 - probs + epsilon) + torch.log(1 - sim if not com else (1 - epsilon)))
+
+    def _in_(a, b):
+        return -log_conditional_prob(b, a, True)
+
+    # q in p
+    _idx = reaches[:, 0].bool()
+    loss[_idx] += _in_(q[_idx], p[_idx]) + _not_in_(p[_idx], q[_idx], sims[_idx, 0])
+    # c in q
+    _idx = reaches[:, 2].bool()
+    loss[_idx] += _in_(c[_idx], q[_idx]) + _not_in_(q[_idx], c[_idx], sims[_idx, 1])
+    # p in q
+    _idx = reaches[:, 1].bool()
+    loss[_idx] += _in_(p[_idx], q[_idx]) + _not_in_(q[_idx], p[_idx], sims[_idx, 0])
+    # q in c
+    _idx = reaches[:, 3].bool()
+    loss[_idx] += _in_(q[_idx], c[_idx]) + _not_in_(c[_idx], q[_idx], sims[_idx, 1])
+    # p not in q, q not in p
+    _idx = torch.logical_not((reaches[:, 0] * reaches[:, 1]).bool())
+    loss[_idx] = _not_in_(p[_idx], q[_idx], sims[_idx, 0]) + _not_in_(q[_idx], p[_idx], sims[_idx, 0])
+    # c not in q, q not in c
+    _idx = torch.logical_not((reaches[:, 2] * reaches[:, 3]).bool())
+    loss[_idx] = _not_in_(c[_idx], q[_idx], sims[_idx, 1]) + _not_in_(q[_idx], c[_idx], sims[_idx, 1])
+
+    return loss.mean() + regularization_loss(boxes.reshape(-1, boxes.shape[-1]))

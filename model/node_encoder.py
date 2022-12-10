@@ -49,9 +49,10 @@ class TMN(nn.Module):
         e_scores = self.u_e(self.f(e))
         scores = self.u(self.f(torch.cat((e.detach(), l.detach(), r.detach()), -1)))
         if self.training:
-            return nn.Sigmoid()(scores), nn.Sigmoid()(l_scores), nn.Sigmoid()(r_scores), nn.Sigmoid()(e_scores)
+            return nn.Sigmoid()(scores).squeeze(-1), nn.Sigmoid()(l_scores).squeeze(-1), nn.Sigmoid()(r_scores).squeeze(
+                -1)  # , nn.Sigmoid()(e_scores)
         else:
-            return nn.Sigmoid()(scores)
+            return nn.Sigmoid()(scores), None, None
 
 
 class NodeEncoder(torch.nn.Module):
@@ -315,7 +316,7 @@ class HighwayNetwork(nn.Module):
             gate_values = self.sigmoid(self.gate[layer_idx](inputs))
             nonlinear = self.activation(self.nonlinear[layer_idx](inputs))
             inputs = gate_values * nonlinear + (1. - gate_values) * inputs
-        return self.sigmoid(self.final_linear_layer(inputs))
+        return self.final_linear_layer(inputs)
 
 
 class BoxDecoder(torch.nn.Module):
@@ -335,19 +336,24 @@ class BoxDecoder(torch.nn.Module):
         return x
 
 
-def NaiveScorer(q, f, s):
+def InsertionScorer(q, f, s):
     # joint_fs = hard_intersection(f, s, True)
     # prob_q_given_fs = conditional_prob(q, joint_fs, True)
     prob_f_given_q = conditional_prob(f, q, True)
     prob_q_given_s = conditional_prob(q, s, True)
+    return prob_f_given_q * prob_q_given_s
+
+
+def AttachScorer(q, f):
+    prob_f_given_q = conditional_prob(f, q, True)
     prob_q_given_f = conditional_prob(q, f, True)
-    return prob_f_given_q * prob_q_given_s * prob_q_given_f
+    return prob_f_given_q * prob_q_given_f#, prob_f_given_q - prob_q_given_f
 
 
 class Scorer(torch.nn.Module):
     def __init__(self, box_dim, inter_dim=20):
         super(Scorer, self).__init__()
-        k = inter_dim
+        k = box_dim
         # self.w = torch.nn.Bilinear(box_dim, 2 * box_dim, out_dim)
         self.p0 = torch.nn.Linear(box_dim, k)
         self.p1 = torch.nn.Linear(3 * box_dim, k)
@@ -373,21 +379,21 @@ class Scorer(torch.nn.Module):
         # s_in_q = conditional_prob(q, s, True).unsqueeze(-1)
         # q_in_s = conditional_prob(s, q, True).unsqueeze(-1)
 
-        _q = self.act(self.p0(q))
-        _all = self.act(self.p1(torch.cat([q, f, s], dim=-1)))
+        # _q = self.act(self.p0(q))
+        # _all = self.act(self.p1(torch.cat([q, f, s], dim=-1)))
         _f = self.act(self.p2(torch.cat([q, f], dim=-1)))
-        _s = self.act(self.p2(torch.cat([q, s], dim=-1)))
+        _s = self.act(self.p3(torch.cat([s, q], dim=-1)))
 
-        e1 = torch.cat([_all], dim=-1)
-        e2 = torch.cat([_f], dim=-1)
-        e3 = torch.cat([_s], dim=-1)
-        _all = self.w1(_q, e1) + self.v1(torch.cat([_q, e1], dim=-1))
-        _f = self.w2(_q, e2) + self.v2(torch.cat([_q, e2], dim=-1))
-        _s = self.w3(_q, e3) + self.v3(torch.cat([_q, e3], dim=-1))
+        # e1 = torch.cat([_all], dim=-1)
+        # e2 = torch.cat([_f], dim=-1)
+        # e3 = torch.cat([_s], dim=-1)
+        # _all = self.w1(_q, e1) + self.v1(torch.cat([_q, e1], dim=-1))
+        _f = self.w2(_f, _s) + self.v2(torch.cat([_f, _s], dim=-1))
+        # _s = self.w3(_f, e3) + self.v3(torch.cat([_q, e3], dim=-1))
 
-        s1 = torch.nn.Sigmoid()(self.classifier1(torch.cat([_all, _f, _s], dim=-1)))
+        # s1 = torch.nn.Sigmoid()(self.classifier1(torch.cat([_all, _f, _s], dim=-1)))
         s2 = torch.nn.Sigmoid()(self.classifier2(_f))
-        s3 = torch.nn.Sigmoid()(self.classifier3(_s))
+        # s3 = torch.nn.Sigmoid()(self.classifier3(_s))
 
         # intersect = hard_intersection(q, f, True).expand(f.shape)
         # out = self.w(q, torch.cat([f, s], dim=-1)) + self.v(torch.cat([q, f, s], dim=-1))
@@ -396,7 +402,7 @@ class Scorer(torch.nn.Module):
         # f_f = self.act(self.v3(torch.cat([q, f], dim=-1)))
         #
         # out = torch.nn.Sigmoid()(self.classifier(torch.cat([out1, out2, out3], dim=-1))).squeeze(-1)
-        return s1, s2, s3
+        return s2.squeeze(-1), s2.squeeze(-1), s2.squeeze(-1)
 
 
 class TreeKiller(torch.nn.Module):
@@ -409,7 +415,7 @@ class TreeKiller(torch.nn.Module):
         self.node_encoder = MultimodalNodeEncoder(hidden_size, 9)
         self.struct_encoder = StructuralFusionModule(hidden_size, 3)
         # self.scorer = Scorer(box_dim, out_dim if out_dim is not None else box_dim // 5)
-        self.scorer = NaiveScorer
+        self.scorer = InsertionScorer
         # self.scorer = TMN(box_dim, box_dim)
 
     def change_mode(self):
@@ -482,7 +488,24 @@ class TMNModel(torch.nn.Module):
         s = self.proj(s[:, 0, :], s[:, 1:, :])
         return self.match(x, f, s)
 
-# class
+
+class BoxTax(torch.nn.Module):
+    def __init__(self, hidden_size, box_dim):
+        super(BoxTax, self).__init__()
+        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 2)
+        self.i_scorer = InsertionScorer
+        self.a_scorer = AttachScorer
+
+    def forward(self, x, i_idx):
+        # x: b * 3 * hidden_size
+        boxes = self.box_decoder(x)
+        q, p, c = boxes[i_idx].chunk(3, 1)
+        i_scores = self.i_scorer(q, p, c)
+
+        q, p, _ = boxes[torch.logical_not(i_idx)].chunk(3, 1)
+        a_scores = self.a_scorer(q, p)
+
+        return boxes, i_scores, a_scores
 
 
 if __name__ == "__main__":

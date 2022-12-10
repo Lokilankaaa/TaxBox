@@ -4,14 +4,14 @@ import networkx as nx
 
 class TreeMetric:
     def __init__(self):
-        self.acc = []
+        self.hit1 = []
         self.ranks = []
         self.wp = []
         self.hit10 = []
         self.hit5 = []
 
     def clear(self):
-        self.acc = []
+        self.hit1 = []
         self.hit10 = []
         self.hit5 = []
         self.ranks = []
@@ -31,9 +31,9 @@ class TreeMetric:
 
     def show_results(self):
         return {
-            'mean_acc': np.array(self.acc).mean(),
             'hit10': np.array(self.hit10).mean(),
             'hit5': np.array(self.hit5).mean(),
+            'hit1': np.array(self.hit1).mean(),
             'mrr': (1 / np.array(self.ranks)).mean(),
             'mr': np.array(self.ranks).mean(),
             'wup': np.array(self.wp).mean(),
@@ -43,12 +43,12 @@ class TreeMetric:
         # scores, fs_pairs: 2n - 1
         if scores.dim() == 2:
             scores = scores.squeeze(1)
-        gt = list([i for i in gt if i in new_to_old]) + [gt[-1]]
         ranks = list([new_to_old[fs_pairs[new_id, 0].item()] for new_id in scores.topk(scores.shape[0])[1]])
+        gt = list([i for i in gt if i in new_to_old and i in ranks]) + [gt[-1]]
         top10 = ranks[:10]
         top5 = ranks[:5]
         path = nx.shortest_path(graph, 0, top5[0])
-        self.acc.append(top5[0] == gt[-2])
+        self.hit1.append(top5[0] == gt[-2])
         self.hit5.append(gt[-2] in top5)
         self.hit10.append(gt[-2] in top10)
         self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))

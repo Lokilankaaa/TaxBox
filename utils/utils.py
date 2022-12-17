@@ -13,6 +13,7 @@ import multiprocessing as mp
 from itertools import combinations
 import math
 from typing import Union
+import re
 
 EPS = 1e-13
 
@@ -71,7 +72,7 @@ def checkpoint(path_to_save, model):
 
 def save_state(path_to_save, scheduler, optimizer, e):
     print("saving training state to " + path_to_save)
-    torch.save({ 'optimizer': optimizer.state_dict(), 'e': e}, path_to_save)
+    torch.save({'optimizer': optimizer.state_dict(), 'e': e}, path_to_save)
 
 
 def id_to_ascendants(_id, id_to_father):
@@ -338,6 +339,69 @@ def conditional_prob(x, y, box_mode=True):
     return (soft_volume(hard_intersection(x, y, box_mode=box_mode), box_mode=box_mode) / soft_volume(y,
                                                                                                      box_mode=box_mode)).prod(
         -1).clamp(min=EPS)
+
+
+def center_of(x, box_mode=True):
+    z, Z = x.chunk(2, -1)
+    if box_mode:
+        return (z + Z) / 2
+    else:
+        return z
+
+
+def calculate_ranks_from_similarities(all_similarities, positive_relations):
+    """
+    all_similarities: a np array
+    positive_relations: a list of array indices
+
+    return a list
+    """
+    # positive_relation_similarities = all_similarities[positive_relations]
+    # negative_relation_similarities = np.ma.array(all_similarities, mask=False)
+    # negative_relation_similarities.mask[positive_relations] = True
+    # ranks = list((negative_relation_similarities > positive_relation_similarities[:, np.newaxis]).sum(axis=1) + 1)
+    # ranks = list((all_similarities > positive_relation_similarities[:, np.newaxis]).sum(axis=1) + 1)
+
+    all_rank = np.argsort(np.argsort(-all_similarities))
+    rank = list(all_rank[positive_relations] + 1)
+    # first = np.where(all_rank == 0)[0]
+    return rank
+
+
+def obtain_ranks(outputs, targets):
+    """
+    outputs : tensor of size (batch_size, 1), required_grad = False, model predictions
+    targets : tensor of size (batch_size, ), required_grad = False, labels
+        Assume to be of format [1, 0, ..., 0, 1, 0, ..., 0, ..., 0]
+    mode == 0: rank from distance (smaller is preferred)
+    mode == 1: rank from similarity (larger is preferred)
+    """
+    calculate_ranks = calculate_ranks_from_similarities
+    all_ranks = []
+    prediction = outputs.cpu().numpy().squeeze()
+    label = targets.cpu().numpy()
+    sep = np.array([0, 1], dtype=label.dtype)
+
+    # fast way to find subarray indices in a large array, c.f. https://stackoverflow.com/questions/14890216/return-the-indexes-of-a-sub-array-in-an-array
+    end_indices = [(m.start() // label.itemsize) + 1 for m in re.finditer(sep.tostring(), label.tostring())]
+    end_indices.append(len(label) + 1)
+    start_indices = [0] + end_indices[:-1]
+    for start_idx, end_idx in zip(start_indices, end_indices):
+        distances = prediction[start_idx: end_idx]
+        labels = label[start_idx:end_idx]
+        positive_relations = list(np.where(labels == 1)[0])
+        ranks = calculate_ranks(distances, positive_relations)
+        all_ranks.append(ranks)
+    return all_ranks
+
+
+def rearrange(energy_scores, candidate_position_idx, true_position_idx):
+    tmp = np.array([[tuple(x) == tuple(y) for x in candidate_position_idx] for y in true_position_idx]).any(0)
+    correct = np.where(tmp)[0]
+    incorrect = np.where(~tmp)[0]
+    labels = torch.cat((torch.ones(len(correct)), torch.zeros(len(incorrect)))).int()
+    energy_scores = torch.cat((energy_scores[correct], energy_scores[incorrect]))
+    return energy_scores, labels
 
 
 def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, List[str]], label, device):

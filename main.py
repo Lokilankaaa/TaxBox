@@ -6,7 +6,7 @@ import os
 
 from utils.mkdataset import split_tree_dataset
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+os.environ['CUDA_VISIBLE_DEVICES'] = '5'
 
 # from datasets_torch.handcrafted import Handcrafted
 # from datasets_torch.nodeset import NodeSet
@@ -15,13 +15,13 @@ import torch
 from model.node_encoder import NodeEncoder, twinTransformer, MultimodalNodeEncoder, TreeKiller, TMNModel, BoxTax
 import configparser
 from utils.loss import triplet_loss, contrastive_loss, adaptive_BCE, insertion_loss, tmnloss, box_constraint_loss, \
-    attachment_loss
+    attachment_loss, ranking_loss
 import logging
 from utils.graph_operate import test_on_insert, test_entailment
 from utils.visualize_graph import *
 from utils.metric import TreeMetric
 from utils.utils import sample_path, sample_pair, checkpoint, sample_triples, sample_n_nodes, adjust_moco_momentum, \
-    save_state
+    save_state, rearrange
 from tensorboardX import SummaryWriter
 from utils.scheduler import get_scheduler
 import argparse
@@ -42,6 +42,7 @@ parser.add_argument("--vis_graph", action="store_true")
 parser.add_argument("--parallel", action="store_true")
 parser.add_argument("--load_dataset_pt", type=str, default='imagenet_dataset.pt')
 parser.add_argument("--resume", action="store_true")
+parser.add_argument("--model", choices=['boxtax', 'tmn'])
 
 # def get_dataset(root, dataset):
 #     return Handcrafted(root)
@@ -60,10 +61,12 @@ def prepare(args, dataset):
     # model = GCN([1024, 512, 512, 1024], 3).to(device)
     # model = twinTransformer(args.box_dim, args.max_imgs_per_node + 1)
     # model = TreeKiller(args.box_dim, 512)
-    model = BoxTax(512, args.box_dim)
+    if args.model == 'boxtax':
+        model = BoxTax(512, args.box_dim)
+    elif args.model == 'tmn':
+        model = TMNModel(args.box_dim, 512)
+
     model_sum(model)
-    # model = TMNModel(args.box_dim, 512)
-    # prep = model.preprocess
     model.to(device)
     optimizer = torch.optim.Adam(params=[
         # {'params': model.node_encoder.parameters(), 'lr': args.lr},
@@ -99,7 +102,7 @@ def train(model, dataset, optimizer, scheduler, device, args):
     a_metric = TreeMetric()
     model.train()
     # sample_nums = args.sample_nums
-    total_iters, cum_tot_loss, cum_i_loss, cum_a_loss, cum_b_loss = 0, 0, 0, 0, 0
+    total_iters, cum_tot_loss, cum_i_loss, cum_a_loss, cum_b_loss, cum_r_loss = 0, 0, 0, 0, 0, 0
     bs = []
     from torch.utils.data import DataLoader
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=10)
@@ -115,89 +118,48 @@ def train(model, dataset, optimizer, scheduler, device, args):
             #     torch.cuda.empty_cache()
             optimizer.zero_grad()
 
-            inputs, labels, sims, reaches, i_idx = batch
-            inputs = inputs.reshape(-1, 3, 512).to(device)
-            labels = labels.reshape(-1, 3).to(device)
+            inputs, labels, sims, reaches, i_idx, rank_sims = batch
+            inputs = inputs.to(device)
+            labels = labels.to(device)
             sims = sims.reshape(-1, 2).to(device)
-            i_idx = i_idx.reshape(-1).to(device)
+            i_idx = i_idx.to(device)
             reaches = reaches.reshape(-1, 4).to(device)
 
-            boxes, i_scores, a_scores = model(inputs, i_idx)
-            loss_i = insertion_loss(i_scores, labels[i_idx]) if i_idx.sum() > 0 else 0
-            loss_a = attachment_loss(a_scores, labels[torch.logical_not(i_idx)]) if i_idx.sum() < i_idx.shape[0] else 0
-            loss_box = box_constraint_loss(boxes, sims, reaches)
-            loss = loss_box + loss_i + loss_a
+            if args.model == 'boxtax':
+                boxes, scores = model(inputs, i_idx)
+                loss_i = insertion_loss(scores, labels)
+                # loss_a = attachment_loss(a_scores, labels.reshape(-1, 3)[torch.logical_not(i_idx)]) if i_idx.sum() < \
+                #                                                                                        i_idx.shape[0] else 0
+                loss_r = ranking_loss(scores, labels, i_idx, rank_sims)
+                loss_box = box_constraint_loss(boxes.reshape(boxes.shape[0] * boxes.shape[1], 3, -1), sims, reaches)
+                loss = loss_box + loss_i + loss_r
+            elif args.model == 'tmn':
+                q, p, c = inputs.chunk(3, 2)
+                out = model(q, p, c)
+                loss = tmnloss(out, labels)
+            # updating boxes storage
 
-            # pairs, labels = batch
-            # pairs = pairs.to(device).reshape(-1, 3, 101, 512).float()
-            # labels = labels.to(device).reshape(-1, 3)
-            # order = list(range(len(labels)))
-            # random.shuffle(order)
-            # pairs = pairs[order]
-            # labels = labels[order]
-            # scores = model(pairs[:, 0], pairs[:, 1], pairs[:, 2])
-            # loss = tmnloss(scores, labels)
-
-            # if total_iters % 100 == 0:
-            #     print(scores[0].squeeze(-1).topk(10))
-            #     print(scores[0].squeeze(-1).topk(10, largest=False))
-
-            # g, node_features, leaves_embeds, _, new_to_old, path_sim = batch
-            # bs.append(batch)
-            # node_features = node_features.to(device)
-            # paired_nodes = list(range(node_features.shape[0]))
-            # boxes, scores, fs_pairs = model(node_features, leaves_embeds, paired_nodes, g)
-            # loss = adaptive_BCE(paired_nodes, boxes, g, path_sim) + cls_loss(scores, paired_nodes, fs_pairs, g)
-            # if e > 1:
-            #     loss = 0.1 * loss + cls_loss(scores, paired_nodes, fs_pairs, g)
             if not torch.isnan(loss):
                 loss.backward()
                 optimizer.step()
             else:
                 return
-            # updating boxes storage
-            # if False and i + 1 in dataset.get_milestone():
-            #     print('milestone--' + str(i))
-            #     model.eval()
-            #     model.change_mode()
-            #     for b in bs:
-            #         g, node_features, leaves_embeds, _, new_to_old, path_sim = b
-            #         with torch.no_grad():
-            #             fused = model(node_features, leaves_embeds, None, g).detach()
-            #     dataset.update_boxes(fused.squeeze(0), new_to_old)
-            #     model.change_mode()
-            #     model.train()
-            # text, img = [], []
-            #
-            # for i in batch:
-            #     inputs = dataset[i]
-            #     _id, _name, _text, _imgs = inputs
-            #     text = _text if len(text) == 0 else torch.cat([text, _text])
-            #     img = _imgs if len(img) == 0 else torch.cat([img, _imgs])
-            # text = text.to(device)
-            # img = img.to(device)
-            # q, k = model(text, img)
-
-            # loss, pos_n = contrastive_loss(q, k, con_m, batch, args.regularization_loss)
-            # pe += loss.item()
-            # pp += p
-            # pn += n
-
-            # loss = contrastive_loss(outs)
             cum_tot_loss += loss.item()
             cum_i_loss += loss_i.item() if hasattr(loss_i, 'item') else 0
-            cum_a_loss += loss_a.item() if hasattr(loss_a, 'item') else 0
+            # cum_a_loss += loss_a.item() if hasattr(loss_a, 'item') else 0
             cum_b_loss += loss_box.item()
+            cum_r_loss += loss_r.item()
 
             total_iters += 1
-            # if total_iters % 100 == 0:
-            #     print(q[random.randint(0, q.shape[0] - 1)])
             if total_iters % 10 == 0:
-                print("Epoch {},{}. loss:{}, i_loss:{}, b_loss:{}, a_loss:{}".format(e, total_iters, cum_tot_loss / 10,
-                                                                                     cum_i_loss / 10, cum_b_loss / 10,
-                                                                                     cum_a_loss / 10))
+                print("Epoch {},{}. loss:{}, i_loss:{}, b_loss:{}, a_loss:{}, r_loss:{}".format(e, total_iters,
+                                                                                                cum_tot_loss / 10,
+                                                                                                cum_i_loss / 10,
+                                                                                                cum_b_loss / 10,
+                                                                                                cum_a_loss / 10,
+                                                                                                cum_r_loss / 10))
                 writer.add_scalar('total loss', cum_tot_loss / 10, total_iters)
-                cum_tot_loss, cum_i_loss, cum_b_loss, cum_a_loss = 0, 0, 0, 0
+                cum_tot_loss, cum_i_loss, cum_b_loss, cum_a_loss, cum_r_loss = 0, 0, 0, 0, 0
 
             scheduler.step()
         bs = []
@@ -221,9 +183,6 @@ def __test(dataset, model, i_metric, a_metric, mode, device):
     dataset.clear_boxes()
     dataset.change_mode('train')
     model.eval()
-    # model.change_mode()
-    # model.load_state_dict(torch.load(
-    #     '/data/home10b/xw/visualCon/TMN-main/data/saved/Noun/MatchModel/1130_104909/models/trial1/model_best.pth')['state_dict'])
     with torch.no_grad():
         for b in dataset.train:
             # g, node_features, leaves_embeds, _, new_to_old, path_sim = b
@@ -242,7 +201,7 @@ def __test(dataset, model, i_metric, a_metric, mode, device):
 
         boxes = torch.cat(boxes, dim=0)
 
-        old_to_new[len(dataset.whole.nodes())] = len(new_to_old)
+        old_to_new[-1] = len(new_to_old)
         new_to_old.append(len(dataset.whole.nodes()))
         boxes = torch.cat([boxes, torch.zeros(1, 512).to(device)])
         boxes = model.box_decoder(boxes)
@@ -252,21 +211,24 @@ def __test(dataset, model, i_metric, a_metric, mode, device):
 
         # dummy_box = torch.zeros(1, boxes.shape[-1]).to(boxes.device)
         # _boxes = torch.cat([boxes, dummy_box], dim=0)  # boxes: n * (n+1) * d
-        edge = torch.Tensor(list([[old_to_new[e[0]], old_to_new[e[1]]] for e in dataset._tree.edges()]))
-        edge_dummy = torch.Tensor(
-            list([[old_to_new[n], old_to_new[len(dataset.whole.nodes())]] for n in dataset._tree.nodes()]))
-        edge = torch.cat([edge, edge_dummy]).type(torch.long).to(device)
+        edge = torch.Tensor(list([[old_to_new[e[0]], old_to_new[e[1]]] for e in dataset.edges])).type(torch.long).to(
+            device)
+        # edge_dummy = torch.Tensor(
+        #     list([[old_to_new[n], old_to_new[len(dataset.whole.nodes())]] for n in dataset._tree.nodes()]))
+        # edge = torch.cat([edge, edge_dummy]).type(torch.long).to(device)
         f = boxes[edge[:, 0], :].unsqueeze(1)
         s = boxes[edge[:, 1], :].unsqueeze(1)
-        dummy_idx = len(edge_dummy)
+        att_idx = edge[:, 1] == old_to_new[-1]
+        ins_idx = torch.logical_not(att_idx)
 
-        old_to_new = torch.Tensor(old_to_new).type(torch.long)
+        # old_to_new = torch.Tensor(old_to_new).type(torch.long)
+        # edge = dataset.edges
         dataset.change_mode(mode)
         dataset.shuffle()
         for i, n in enumerate(tqdm.tqdm(dataset)):
-            if mode == 'eval' and i > 300:
-                break
-            node_feature, gt_path, idx = n
+            # if mode == 'eval' and i > 300:
+            #     break
+            node_feature, gt_path, labels = n
             node_feature = node_feature[0].unsqueeze(0).to(boxes.device).float()
             feature = model.box_decoder(node_feature)
 
@@ -274,15 +236,19 @@ def __test(dataset, model, i_metric, a_metric, mode, device):
             # box = model.box_decoder_q(feature)
             feature = feature.expand(f.shape)
 
-            i_scores = model.i_scorer(feature[:-dummy_idx], f[:-dummy_idx], s[:-dummy_idx])
-            a_scores = model.a_scorer(feature[-dummy_idx:], f[-dummy_idx:])
-            scores = torch.cat(
-                [i_scores / i_scores.max(), a_scores / a_scores.max()], dim=0)
+            i_scores = model.i_scorer(feature[ins_idx], f[ins_idx], s[ins_idx])
+            a_scores = model.a_scorer(feature[att_idx], f[att_idx])
+            # scores = torch.cat([i_scores, a_scores], dim=0)
+            scores = torch.zeros_like(ins_idx).float().to(feature.device)
+            scores[ins_idx] += i_scores.squeeze(-1)
+            scores[att_idx] += a_scores.squeeze(-1)
+            scores = model.mul_sim(scores.unsqueeze(0), feature.squeeze(1).unsqueeze(0), f.squeeze(1).unsqueeze(0),
+                                   s.squeeze(1).unsqueeze(0), ins_idx.unsqueeze(0)).squeeze(0)
 
-            i_metric.update(scores.squeeze(1), gt_path, new_to_old, old_to_new, dataset._tree, edge)
+            first = torch.argmax(scores).item()
+            scores, labels = rearrange(scores, dataset.edges, labels)
+            i_metric.update(scores, labels, gt_path, new_to_old, first, dataset._tree, edge)
             # a_metric.update(a_scores.squeeze(1), gt_path, new_to_old, old_to_new, dataset._tree, edge[-dummy_idx:])
-            # novel_in_c, s_in_f = test_entailment(boxes, box, dataset.fs_pairs, old_to_new)
-            # metric.update((novel_in_c, s_in_f), gt_path, new_to_old, dataset._tree, dataset.fs_pairs)
     pprint.pprint(i_metric.show_results())
     dataset.change_mode('train')
     # model.change_mode()

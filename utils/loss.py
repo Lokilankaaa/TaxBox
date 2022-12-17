@@ -2,7 +2,7 @@ import random
 import torch
 from copy import deepcopy
 
-from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_prob
+from .utils import log_conditional_prob, hard_volume, soft_volume, conditional_prob, center_of
 from .utils import sample_path, sample_pair
 import numpy as np
 import torch.nn.functional as F
@@ -64,12 +64,16 @@ import math
 
 
 def regularization_loss(q):
-    qz, qZ = q.chunk(2, -1)
-    abnormal = qZ - qz
-    abnormal = abnormal[abnormal <= 0]
-    if abnormal.sum() == 0:
-        return 0
-    return abnormal.abs().mean(-1).mean()
+    vol_max = 10
+    vol_q = soft_volume(q, box_mode=True).prod(-1)
+    res = vol_q[vol_q > vol_max].mean()
+    return 0 if torch.isnan(res) else res
+    # qz, qZ = q.chunk(2, -1)
+    # abnormal = qZ - qz
+    # abnormal = abnormal[abnormal <= 0]
+    # if abnormal.sum() == 0:
+    #     return 0
+    # return abnormal.abs().mean(-1).mean()
 
 
 def contrastive_loss(q, k, connect_m, batch, regular=False):
@@ -265,9 +269,12 @@ def insertion_loss(scores, labels):
     s1 = scores
     if s1.dim() == 2:
         s1 = s1.squeeze(-1)
-    loss_fn = torch.nn.BCELoss()
 
-    return loss_fn(s1, labels[:, 0])  # + loss_fn(s2, labels[:, 1]) + loss_fn(s3, labels[:, 2])
+    weights = labels[:, :, 0] * 10
+    weights[weights == 0] = 1
+    loss_fn = torch.nn.BCELoss(weight=weights)
+
+    return loss_fn(s1, labels[:, :, 0])  # + loss_fn(s2, labels[:, 1]) + loss_fn(s3, labels[:, 2])
 
 
 def attachment_loss(scores, labels):
@@ -275,8 +282,12 @@ def attachment_loss(scores, labels):
     if s1.dim() == 2:
         s1 = s1.squeeze(-1)
         # r1 = r1.squeeze(-1)
+
+    weights = labels[:, 0] * 10
+    weights[weights == 0] = 1
     loss_fn = torch.nn.BCELoss()
-    return loss_fn(s1, labels[:, 0])# + (labels[:, 0] * (r1 < 0) * r1.abs()).mean()
+
+    return loss_fn(s1, labels[:, 0])  # + (labels[:, 0] * (r1 < 0) * r1.abs()).mean()
 
 
 def box_constraint_loss(boxes, sims, reaches):
@@ -287,13 +298,22 @@ def box_constraint_loss(boxes, sims, reaches):
     loss = torch.zeros_like(q[:, 0])
 
     def _not_in_(a, b, sim, com=False):
-        epsilon = 1e-8
+        epsilon = torch.Tensor([1e-8]).to(a.device)
         probs = conditional_prob(b, a, True)
         return torch.max(torch.zeros_like(a[:, 0]),
                          -torch.log(1 - probs + epsilon) + torch.log(1 - sim if not com else (1 - epsilon)))
 
     def _in_(a, b):
         return -log_conditional_prob(b, a, True)
+
+    def push_away_sim_center(a, b, sim, com=False):
+        epsilon = torch.Tensor([1e-8]).to(a.device)
+        cen_a = torch.nn.functional.normalize(center_of(a, True), dim=-1)
+        cen_b = torch.nn.functional.normalize(center_of(b, True), dim=-1)
+        probs = (cen_a * cen_b).sum(-1).abs()
+
+        return torch.max(torch.zeros_like(a[:, 0]),
+                         -torch.log(1 - probs + epsilon) + torch.log(1 - sim if not com else (1 - epsilon)))
 
     # q in p
     _idx = reaches[:, 0].bool()
@@ -309,9 +329,37 @@ def box_constraint_loss(boxes, sims, reaches):
     loss[_idx] += _in_(q[_idx], c[_idx]) + _not_in_(c[_idx], q[_idx], sims[_idx, 1])
     # p not in q, q not in p
     _idx = torch.logical_not((reaches[:, 0] * reaches[:, 1]).bool())
-    loss[_idx] = _not_in_(p[_idx], q[_idx], sims[_idx, 0]) + _not_in_(q[_idx], p[_idx], sims[_idx, 0])
+    loss[_idx] = _not_in_(p[_idx], q[_idx], sims[_idx, 0], True) + _not_in_(q[_idx], p[_idx], sims[_idx, 0],
+                                                                            True) + push_away_sim_center(q[_idx],
+                                                                                                         p[_idx],
+                                                                                                         sims[_idx, 0])
     # c not in q, q not in c
     _idx = torch.logical_not((reaches[:, 2] * reaches[:, 3]).bool())
-    loss[_idx] = _not_in_(c[_idx], q[_idx], sims[_idx, 1]) + _not_in_(q[_idx], c[_idx], sims[_idx, 1])
+    loss[_idx] = _not_in_(c[_idx], q[_idx], sims[_idx, 1], True) + _not_in_(q[_idx], c[_idx], sims[_idx, 1],
+                                                                            True) + push_away_sim_center(q[_idx],
+                                                                                                         c[_idx],
+                                                                                                         sims[_idx, 0])
 
     return loss.mean() + regularization_loss(boxes.reshape(-1, boxes.shape[-1]))
+
+
+def ranking_loss(scores, labels, i_idx, rank_sim, margin=0.5):
+    # scores = torch.zeros_like(i_idx).to(i_scores.device).float()
+    # scores[i_idx] = i_scores.squeeze(-1)
+    # scores[torch.logical_not(i_idx)] = a_scores.squeeze(-1)
+
+    gt = labels[:, :, 0].long()
+    b, s = gt.shape[:2]
+
+    scores = scores.reshape(-1, s)
+
+    p_idx = torch.where(gt == 1)
+    n_idx = torch.where(gt == 0)
+
+    neg = scores[n_idx].reshape(b, -1)
+    pos = scores[p_idx].reshape(b, -1).expand(neg.shape)
+    sim = 1 - rank_sim.reshape(b, -1).to(neg.device)
+
+    loss = torch.max(torch.zeros_like(neg),
+                     neg - pos + sim.reshape(b, -1) / 2).mean()
+    return loss

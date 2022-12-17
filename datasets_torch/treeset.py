@@ -1,6 +1,7 @@
 import os
 import random
-from itertools import combinations
+from collections import deque
+from itertools import combinations, chain
 from random import shuffle
 
 import networkx as nx
@@ -144,7 +145,7 @@ class TreeSet(Dataset):
         self._get_leaves()
         self._get_all_paths()
         self._stats()
-        self._form_mini_batches()
+        # self._form_mini_batches()
         self.generate_fs_pairs()
         self.generate_node2pairs()
         self.generate_node2ancestors()
@@ -152,15 +153,39 @@ class TreeSet(Dataset):
         self.generate_edges()
 
     def generate_edges(self):
-        self.edges = list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
+        candidates = set(chain.from_iterable([[(n, d) for d in ds] for n, ds in self.node2descendant.items()]))
+        self.edges = candidates # list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
 
     def generate_node2pairs(self):
-        for n in self._tree.nodes():
-            if n == 0:
+        for node in self.whole.nodes():
+            if node == 0:
                 continue
-            _f = list(self._tree.predecessors(n))[0]
-            _s = list(self._tree.successors(n)) + [-1]
-            self.node2pairs[n] = list([[_f, s] for s in _s])
+            parents = set()
+            children = set()
+            ps = deque(self.whole.predecessors(node))
+            cs = deque(self.whole.successors(node))
+            while ps:
+                p = ps.popleft()
+                if p in self._tree:
+                    parents.add(p)
+                else:
+                    ps += list(self.whole.predecessors(p))
+            while cs:
+                c = cs.popleft()
+                if c in self._tree:
+                    children.add(c)
+                else:
+                    cs += list(self.whole.successors(c))
+            children.add(-1)
+            position = [(p, c) for p in parents for c in children if p != c]
+            self.node2pairs[node] = position
+
+        # for n in self._tree.nodes():
+        #     if n == 0:
+        #         continue
+        #     _f = list(self._tree.predecessors(n))[0]
+        #     _s = list(self._tree.successors(n)) + [-1]
+        #     self.node2pairs[n] = list([[_f, s] for s in _s])
 
     def generate_node2ancestors(self):
         for n in self._tree.nodes():
@@ -299,17 +324,38 @@ class TreeSet(Dataset):
             res.append(res[-1] + len(l))
         return res[1:-1]
 
+    # def generate_struct_text(self, p, q, c):
+    #     len()
+
+    def extract_ego_tree(self, n, q):
+        s = list(self._tree.successors(n))
+        s.remove(q) if q in s else None
+        node_features = [self._database[n][0].unsqueeze(0)]
+
+        for _s in s:
+            node_features.append(self._database[_s][0].unsqueeze(0))
+
+        edge = [] if len(s) == 0 else [[0, i] for i in range(1, len(s))]
+
+        return node_features, edge
+
     def sample_train_pairs(self, q, num, pos_num=1):
         pos = random.sample(self.node2pairs[q], k=pos_num)
 
-        neg = [list(e) for e in self.edges if e[0] != q and e[1] != q and e not in pos]
+        # neg = [list(e) for e in self.edges if e[0] != q and e[1] != q and e not in self.node2pairs[q]]
         remain = num - len(pos)
         if remain > 0:
-            rest = random.sample(neg, remain) + pos
+            rest = [e for e in random.sample(self.edges, remain) if
+                    e[0] != q and e[1] != q and e not in self.node2pairs[q]]
+            while len(rest) < remain:
+                rest += [e for e in random.sample(self.edges, remain - len(rest)) if
+                         e[0] != q and e[1] != q and e not in self.node2pairs[q] and e not in rest]
         else:
             rest = random.sample(pos, num)
+        sims = self.path_sim_matrix[pos[0][0], [r[0] for r in rest]]
         labels = []
         reaches = []  # q in p, p in q, c in q, q in c
+        rest.insert(random.randint(0, len(rest) - 1), pos[0])
         for r in rest:
             l = [0, 0, 0]
             rea = [0, 0, 0, 0]
@@ -326,7 +372,7 @@ class TreeSet(Dataset):
             l[0] = r in self.node2pairs[q]
             labels.append(l)
             reaches.append(rea)
-        return torch.Tensor(rest), torch.Tensor(labels), torch.Tensor(reaches)
+        return torch.Tensor(rest), torch.Tensor(labels), torch.Tensor(reaches), torch.Tensor(sims)
 
     # def __getitem__(self, idx):
     #     if self.mode == 'eval':
@@ -373,18 +419,19 @@ class TreeSet(Dataset):
     def __getitem__(self, idx):
         if self.mode == 'eval':
             return self._database[self.eva[idx]].float(), nx.shortest_path(
-                self.whole, 0, self.eva[idx]), self.eva[idx]
+                self.whole, 0, self.eva[idx]), self.node2pairs[self.eva[idx]]
         elif self.mode == 'test':
             return self._database[self.test[idx]].float(), nx.shortest_path(
-                self.whole, 0, self.test[idx]), self.test[idx]
+                self.whole, 0, self.test[idx]), self.node2pairs[self.test[idx]]
         else:
             idx += 1
             anchor = self.train[idx]
-            samples, labels, reaches = self.sample_train_pairs(anchor, 10)
+            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 32)
+            assert labels[:, 0].sum() == 1
             embeds = []
             sims = []
             anchor_embed = self._database[anchor][0].unsqueeze(0)
-            i_idx = [False] * 10
+            i_idx = [False] * 32
             for i, s in enumerate(samples):
                 i_idx[i] = s[1] != -1
                 _f = self._database[s[0].item()][0].unsqueeze(0)
@@ -394,7 +441,7 @@ class TreeSet(Dataset):
                     torch.Tensor([self.path_sim_matrix[s[0].int().item(), anchor],
                                   self.path_sim_matrix[anchor, s[1].int().item()]]).unsqueeze(0))
 
-            return torch.cat(embeds), labels, torch.cat(sims), reaches, torch.Tensor(i_idx).bool()
+            return torch.cat(embeds), labels, torch.cat(sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
 
 
 if __name__ == "__main__":

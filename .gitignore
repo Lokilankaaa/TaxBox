@@ -6,5 +6,6 @@ dataset_json/imagnet_dataset.json
 test_nonvisual
 res.txt
 TMN-main
+TaxoEnrich-main
 SemEval-Noun
 SemEval-Noun.zip

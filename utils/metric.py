@@ -1,5 +1,8 @@
 import numpy as np
 import networkx as nx
+import itertools
+
+from utils.utils import calculate_ranks_from_similarities, obtain_ranks
 
 
 class TreeMetric:
@@ -30,29 +33,27 @@ class TreeMetric:
         return c_len
 
     def show_results(self):
+        rank_positions = np.array(list(itertools.chain(*self.ranks)))
         return {
-            'hit10': np.array(self.hit10).mean(),
-            'hit5': np.array(self.hit5).mean(),
-            'hit1': np.array(self.hit1).mean(),
-            'mrr': (1 / np.array(self.ranks)).mean(),
-            'mr': np.array(self.ranks).mean(),
+            'hit10': np.sum(rank_positions <= 10) / len(rank_positions),
+            'hit5': np.sum(rank_positions <= 5) / len(rank_positions),
+            'hit3': np.sum(rank_positions <= 3) / len(rank_positions),
+            'hit1': np.sum(rank_positions <= 1) / len(rank_positions),
+            'mrr': (1 / np.array(list(itertools.chain(*self.ranks)))).mean(),
+            'macro_mr': np.array([np.array(rank).mean() for rank in self.ranks]).mean(),
+            'micro_mr': rank_positions.mean(),
             'wup': np.array(self.wp).mean(),
         }
 
-    def update(self, scores, gt, new_to_old, old_to_new, graph, fs_pairs):
+    def update(self, scores, labels, gt_path, new_to_old, first, graph, fs_pairs):
         # scores, fs_pairs: 2n - 1
-        if scores.dim() == 2:
-            scores = scores.squeeze(1)
-        ranks = list([new_to_old[fs_pairs[new_id, 0].item()] for new_id in scores.topk(scores.shape[0])[1]])
-        gt = list([i for i in gt if i in new_to_old and i in ranks]) + [gt[-1]]
-        top10 = ranks[:10]
-        top5 = ranks[:5]
-        path = nx.shortest_path(graph, 0, top5[0])
-        self.hit1.append(top5[0] == gt[-2])
-        self.hit5.append(gt[-2] in top5)
-        self.hit10.append(gt[-2] in top10)
-        self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))
-        self.ranks.append(ranks.index(gt[-2]) + 1)
+        # scores = scores.cpu().numpy()
+        rank = obtain_ranks(scores, labels)
+        # ranks = list([new_to_old[fs_pairs[new_id, 0].item()] for new_id in scores.topk(scores.shape[0])[1]])
+        gt_path = list([i for i in gt_path if i in new_to_old]) + [gt_path[-1]]
+        path = nx.shortest_path(graph, 0, new_to_old[fs_pairs[first, 0].item()])
+        self.wp.append(2 * self.lca(path, gt_path) / (len(gt_path) + len(path)))
+        self.ranks.append(rank[0])
     # def update(self, res, gt, new_to_old, graph, fs_pairs):
     # novel_in_c, s_in_f = res
     # pred = res[0]
@@ -72,5 +73,3 @@ class TreeMetric:
     # self.wp.append(2 * self.lca(path, gt) / (len(gt) + len(path)))
     # self.ranks.append(sort_pred.index(gt[-2]) + 1)
     # self.mean_prob.append(pred[self.ranks[-1] - 1].cpu().numpy())
-
-

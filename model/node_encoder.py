@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from copy import deepcopy
 import numpy as np
 
-from utils.utils import hard_intersection, conditional_prob
+from utils.utils import hard_intersection, conditional_prob, center_of
 from .module import Transformer
 from transformers import ViltModel, ViltConfig, BertConfig, BertModel
 from utils.graph_operate import transitive_closure_mat, adj_mat
@@ -341,13 +341,21 @@ def InsertionScorer(q, f, s):
     # prob_q_given_fs = conditional_prob(q, joint_fs, True)
     prob_f_given_q = conditional_prob(f, q, True)
     prob_q_given_s = conditional_prob(q, s, True)
+    # cen_q = torch.nn.functional.normalize(center_of(q, True), dim=-1)
+    # cen_f = torch.nn.functional.normalize(center_of(f, True), dim=-1)
+    # sim = (cen_q * cen_f).sum(-1).abs()
     return prob_f_given_q * prob_q_given_s
 
 
 def AttachScorer(q, f):
     prob_f_given_q = conditional_prob(f, q, True)
     prob_q_given_f = conditional_prob(q, f, True)
-    return prob_f_given_q * prob_q_given_f#, prob_f_given_q - prob_q_given_f
+    # cen_q = torch.nn.functional.normalize(center_of(q, True), dim=-1)
+    # cen_f = torch.nn.functional.normalize(center_of(f, True), dim=-1)
+    # cen_q = torch.nn.functional.normalize(center_of(q, True), dim=-1)
+    # cen_f = torch.nn.functional.normalize(center_of(f, True), dim=-1)
+    # sim = (cen_q * cen_f).sum(-1).abs()
+    return prob_f_given_q  # * sim#, prob_f_given_q - prob_q_given_f
 
 
 class Scorer(torch.nn.Module):
@@ -470,7 +478,7 @@ class TMNModel(torch.nn.Module):
         super(TMNModel, self).__init__()
         self.embedding = None
         # self.proj = HighwayNetwork(hidden_size, box_dim, 3)
-        self.proj = MultimodalNodeEncoder(hidden_size, 9)
+        # self.proj = MultimodalNodeEncoder(hidden_size, 9)
 
         self.match = TMN(hidden_size, hidden_size)
 
@@ -483,9 +491,9 @@ class TMNModel(torch.nn.Module):
             x = self.embedding(x)
             f = self.embedding(f)
             s = self.embedding(s)
-        x = self.proj(x[:, 0, :], x[:, 1:, :])
-        f = self.proj(f[:, 0, :], f[:, 1:, :])
-        s = self.proj(s[:, 0, :], s[:, 1:, :])
+        # x = self.proj(x[:, 0, :], x[:, 1:, :])
+        # f = self.proj(f[:, 0, :], f[:, 1:, :])
+        # s = self.proj(s[:, 0, :], s[:, 1:, :])
         return self.match(x, f, s)
 
 
@@ -496,16 +504,36 @@ class BoxTax(torch.nn.Module):
         self.i_scorer = InsertionScorer
         self.a_scorer = AttachScorer
 
+    def mul_sim(self, scores, q, p, c, i_idx):
+        # scores: b * l, q,p,c: b*l*d
+        cen_q = center_of(q, True)
+        cen_p = center_of(p, True)
+        cen_c = center_of(c, True)
+        dis_qp = torch.nn.Softmax(dim=-1)(1 / torch.norm(cen_p - cen_q, p=2, dim=-1))
+        dis_qc = torch.nn.Softmax(dim=-1)(1 / torch.norm(cen_c - cen_q, p=2, dim=-1))
+        scores[i_idx] *= dis_qc[i_idx]
+        scores *= dis_qp
+
+        return scores
+
     def forward(self, x, i_idx):
         # x: b * 3 * hidden_size
+
         boxes = self.box_decoder(x)
-        q, p, c = boxes[i_idx].chunk(3, 1)
-        i_scores = self.i_scorer(q, p, c)
 
-        q, p, _ = boxes[torch.logical_not(i_idx)].chunk(3, 1)
-        a_scores = self.a_scorer(q, p)
+        q, p, c = boxes.chunk(3, -2)
+        q, p, c = q.squeeze(-2), p.squeeze(-2), c.squeeze(-2)
 
-        return boxes, i_scores, a_scores
+        i_scores = self.i_scorer(q[i_idx], p[i_idx], c[i_idx])
+        a_scores = self.a_scorer(q[torch.logical_not(i_idx)], p[torch.logical_not(i_idx)])
+
+        scores = torch.zeros(boxes.shape[:2]).to(q.device)
+        scores[i_idx] += i_scores
+        scores[torch.logical_not(i_idx)] += a_scores
+
+        scores = self.mul_sim(scores, q, p, c, i_idx)
+
+        return boxes, scores
 
 
 if __name__ == "__main__":

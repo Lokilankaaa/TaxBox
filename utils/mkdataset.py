@@ -2,7 +2,9 @@ import time
 import os
 import random
 import json
+from collections import deque
 from copy import deepcopy
+from itertools import chain
 
 import openai
 import tqdm
@@ -89,6 +91,95 @@ def extract_tree_from_imagenet(word_path, imagenet_path, save=True):
             json.dump(tree, f)
 
     return tree
+
+
+def _get_holdout_subgraph(g, node_ids):
+    node_to_remove = [n for n in g.nodes if n not in node_ids]
+    subgraph = g.subgraph(node_ids).copy()
+    for node in node_to_remove:
+        parents = set()
+        children = set()
+        ps = deque(g.predecessors(node))
+        cs = deque(g.successors(node))
+        while ps:
+            p = ps.popleft()
+            if p in subgraph:
+                parents.add(p)
+            else:
+                ps += list(g.predecessors(p))
+        while cs:
+            c = cs.popleft()
+            if c in subgraph:
+                children.add(c)
+            else:
+                cs += list(g.successors(c))
+        for p in parents:
+            for c in children:
+                subgraph.add_edge(p, c)
+    # remove jump edges
+    node2descendants = {n: set(nx.descendants(subgraph, n)) for n in subgraph.nodes}
+    for node in subgraph.nodes():
+        if subgraph.out_degree(node) > 1:
+            successors1 = set(subgraph.successors(node))
+            successors2 = set(chain.from_iterable([node2descendants[n] for n in successors1]))
+            checkset = successors1.intersection(successors2)
+            if checkset:
+                for s in checkset:
+                    subgraph.remove_edge(node, s)
+    return subgraph
+
+
+def remove_multiparents(graph):
+    to_process = [n for n in graph.nodes if graph.in_degree(n) > 1]
+    for n in to_process:
+        edges = list(graph.in_edges(n))
+        sel = random.choice(edges)
+        edges.remove(sel)
+        list(graph.remove_edge(p[0], p[1]) for p in edges)
+    return graph
+
+def mk_dataset_from_pickle(load_path, d_name):
+    import pickle
+    import numpy as np
+    with open(load_path, 'rb') as fin:
+        data = pickle.load(fin)
+
+    names = data['vocab']
+    whole_g = data['g_full'].to_networkx()
+    node_features = data['g_full'].ndata['x']
+    train = data['train_node_ids']
+    test = data['test_node_ids']
+    val = data['validation_node_ids']
+    roots = [node for node in whole_g.nodes() if whole_g.in_degree(node) == 0]
+    if len(roots) > 1:
+        whole_g = nx.relabel_nodes(whole_g, {i: i + 1 for i in whole_g.nodes})
+        train = (np.array(train) + 1).tolist()
+        test = (np.array(test) + 1).tolist()
+        val = (np.array(val) + 1).tolist()
+        roots = (np.array(roots) + 1).tolist()
+        root = 0
+        for r in roots:
+            whole_g.add_edge(root, r)
+        root_vector = torch.mean(node_features[roots], dim=0, keepdim=True)
+        node_features = torch.cat((root_vector, node_features), 0)
+        names = ['root'] + names
+        train = [0] + train
+    else:
+        relabel = {i: i for i in whole_g.nodes}
+        relabel[0] = roots[0]
+        relabel[roots[0]] = 0
+        assert 0 in train
+        whole_g = nx.relabel_nodes(whole_g, relabel)
+
+    whole_g = nx.DiGraph(whole_g)
+    whole_g = remove_multiparents(whole_g)
+    tree = _get_holdout_subgraph(whole_g, train)
+    res = {'g': tree, 'whole': whole_g, 'train': train, 'test': test, 'eva': val,
+           'names': names, 'descriptions': None}
+    features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
+
+    torch.save(res, d_name + '.pt')
+    torch.save(features, d_name + '.feature.pt')
 
 
 def split_tree_dataset(whole_tree_path, split=0.8):
@@ -430,12 +521,13 @@ if __name__ == '__main__':
     # whole_g, G, names, descriptions, train, test, eva = split_tree_dataset(
     #     '/data/home10b/xw/visualCon/datasets_json/imagenet_dataset.json')
     # print(len(train), len(test), len(eva), len(names))
-    # import torch
     #
     # torch.save({'whole': whole_g,
     #             'g': G, 'names': names, 'descriptions': descriptions, 'train': train, 'test': test, 'eva': eva
     #             }, 'imagenet_dataset.pt')
     # from datasets_torch.treeset import TreeSet
     # t = TreeSet(G, names, descriptions)
-    mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
-                  '/data/home10b/xw/visualCon/TMN-main/data/mywn')
+    # mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
+    #               '/data/home10b/xw/visualCon/TMN-main/data/mywn')
+    mk_dataset_from_pickle('/data/home10b/xw/visualCon/TMN-main/data/MAG-CS/computer_science.pickle.bin',
+                           '../mag_cs')

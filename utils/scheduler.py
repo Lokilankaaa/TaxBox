@@ -19,6 +19,8 @@ def get_scheduler(optimizer, scheduler: str, warmup_steps: int, t_total: int):
                                                             num_training_steps=t_total)
     elif scheduler == 'warmupcosinewithhardrestarts':
         return transformers.get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
-                                                                               num_training_steps=t_total)
+                                                      num_training_steps=t_total)
+    elif scheduler == 'plateau':
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
     else:
         raise ValueError("Unknown scheduler {}".format(scheduler))

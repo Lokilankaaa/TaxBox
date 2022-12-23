@@ -12,47 +12,56 @@ from queue import Queue
 import numpy as np
 from tqdm import tqdm
 
-from utils.utils import batch_load_img
+from utils.utils import batch_load_img, grouper
+from torch_geometric.data import Data
+
+import multiprocessing as mp
 
 
 class TreeSet(Dataset):
-    def __init__(self, whole, G, names, descriptions, train, eva, test, batch_size=250):
+    # whole, G, names, descriptions, train, eva, test,
+    def __init__(self, path, dataset_name, graph_emb=False):
         super(TreeSet, self).__init__()
+
+        self.d_name = dataset_name
+
+        if path.endswith('pt'):
+            d = torch.load(path)
+        elif path.endswith('bin'):
+            import pickle
+            with open(path, 'rb') as f:
+                d = pickle.load(f)
+
+        self.graph_emb = graph_emb
         self.edges = None
         self.mode = 'train'
-        self.whole = whole
-        self.train = train
-        # self.train.remove(0)
-        self.eva = eva
-        self.test = test
-        self._tree = G
-        self._undigraph = G.to_undirected()
+        self.whole = d['whole']
+        self.train = d['train']
+        self.eva = d['eva']
+        self.test = d['test']
+        self._tree = d['g']
+        self._undigraph = self._tree.to_undirected()
         self._c_tree = deepcopy(self._tree)
-        self.names = names
-        self.descriptions = descriptions
-        self.batch_size = batch_size
+        self.names = d['names']
+        self.descriptions = d['descriptions']
         self.leaves = []
         self.paths = {}
         self.min_depth = 0
         self.max_depth = 0
         self.mean_depth = 0
         self.mean_order = 0
-        self.mini_batches = []
-        self.mini_batches_dep = []
-        self.mini_batches_root = []
-        self.decs = None
-        self.fetch_order = []
         self._database = {}
         self.fused_embeddings = {}
         self.path_sim_matrix = None
-        self.fs_pairs = []
         self.node2pairs = {}
         self.node2ancestor = {}
         self.node2descendant = {}
+        self.pyg_data = {}
 
         self._init()
         self._process()
-        self.shuffle()
+        # self.generate_pyg_data()
+        # self.shuffle()
 
     def update_box(self, i, embed):
         self.fused_embeddings[i] = embed
@@ -81,80 +90,41 @@ class TreeSet(Dataset):
         self.max_depth = max(depths)
         self.mean_depth = sum(depths) / len(depths)
         self.mean_order = orders.sum() / (orders != 0).sum()
-        self._count_descs()
-
-    def generate_fs_pairs(self):
-        list(map(lambda x: self.fs_pairs.append([x[0], x[1]]), self._tree.edges()))
-        self.fs_pairs = torch.Tensor(self.fs_pairs).type(torch.long)
-
-    def _form_mini_batches(self):
-        dfs_depth = int(np.log(self.batch_size) / np.log(self.mean_order))
-
-        def get_roots(tree):
-            return list([node for node in tree.nodes.keys() if tree.in_degree(node) == 0])
-
-        q = Queue()
-        q.put(0)
-        while not q.empty():
-            head = q.get()
-            self.mini_batches_root.append(head)
-            d = dfs_depth
-            if self.decs[head] >= self.batch_size:
-                while nx.traversal.dfs_tree(self._c_tree, head, d).number_of_nodes() > int(
-                        self.batch_size * 0.5) and d > 0:
-                    d -= 1
-                mini_tree = nx.traversal.dfs_tree(self._c_tree, head, d + 1)
-                original_node = list(mini_tree.nodes().keys())
-                append_node = []
-                for c in self._c_tree.successors(head):
-                    if self.decs[c] < int(10):
-                        append_node += list(nx.traversal.dfs_tree(self._c_tree, c).nodes.keys())
-                original_node = list(set(original_node + append_node))
-                mini_tree = deepcopy(self._c_tree.subgraph(original_node))
-                for n in get_roots(mini_tree):
-                    self._c_tree.remove_node(n)
-                    original_node.remove(n)
-                for n in append_node:
-                    self._c_tree.remove_node(n)
-                    original_node.remove(n)
-                for n in get_roots(self._c_tree.subgraph(original_node)):
-                    q.put(n)
-                    self.mini_batches_dep.append([head, n])
-            else:
-                mini_tree = deepcopy(nx.traversal.dfs_tree(self._c_tree, head))
-                for n in mini_tree.nodes.keys():
-                    self._c_tree.remove_node(n)
-            self.mini_batches.append(mini_tree)
-
-        del self._c_tree
-
-    def _count_descs(self):
-        self.decs = [0] * int((self._c_tree.number_of_nodes() + 5) / 0.8)
-
-        def dfs(head):
-            self.decs[head] = 1
-            if self._c_tree.out_degree(head) != 0:
-                for c in self._c_tree.successors(head):
-                    self.decs[head] += dfs(c)
-            return self.decs[head]
-
-        dfs(0)
-        self.decs = np.array(self.decs)
 
     def _init(self):
         self._get_leaves()
         self._get_all_paths()
-        self._stats()
+        # self._stats()
         # self._form_mini_batches()
-        self.generate_fs_pairs()
         self.generate_node2pairs()
         self.generate_node2ancestors()
         self.generate_node2descendants()
         self.generate_edges()
 
+    def generate_pyg_data(self, samples, q):
+        p_datas, c_datas = [], []
+        for s in samples:
+            p, c = s
+            pc = list(self._tree.successors(p))
+            cc = list(self._tree.successors(c)) if c != -1 else []
+            if q in pc:
+                pc.remove(q)
+            if q in cc:
+                cc.remove(q)
+            p_features = [self._database[n][0].unsqueeze(0) for n in [p] + pc]
+            p_edge = [[1 + i, 0] for i in range(len(pc))] + [[0, 0]]
+            p_data = Data(x=torch.cat(p_features), edge_index=torch.Tensor(p_edge).t().contiguous().int())
+
+            c_features = [self._database[n][0].unsqueeze(0) if n != -1 else torch.zeros_like(self._database[0]) for n in [c] + cc]
+            c_edge = [[1 + i, 0] for i in range(len(cc))] + [[0, 0]]
+            c_data = Data(x=torch.cat(c_features), edge_index=torch.Tensor(c_edge).t().contiguous().int())
+
+            p_datas.append(p_data), c_datas.append(c_data)
+        return p_datas, c_datas
+
     def generate_edges(self):
         candidates = set(chain.from_iterable([[(n, d) for d in ds] for n, ds in self.node2descendant.items()]))
-        self.edges = candidates # list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
+        self.edges = candidates  # list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
 
     def generate_node2pairs(self):
         for node in self.whole.nodes():
@@ -196,44 +166,13 @@ class TreeSet(Dataset):
             self.node2descendant[n] = list(nx.descendants(self._tree, n)) + [-1]
 
     def _check_saved(self):
-        return os.path.exists('tree_data.pt') and os.path.exists('path_sim_maj.pt')
+        return os.path.exists(self.d_name + '.feature.pt') and os.path.exists(self.d_name + '.pathsim.pt')
 
     def _process(self):
-        mini_batches_dep_g = nx.DiGraph()
-        mini_batches_dep_g.add_edges_from(self.mini_batches_dep)
-
-        def get_leaves(tree):
-            return list([node for node in tree.nodes.keys() if tree.out_degree(node) == 0])
-
-        level = []
-        while mini_batches_dep_g.number_of_nodes() > 0:
-            leaves = get_leaves(mini_batches_dep_g)
-            level.append(list(map(self.mini_batches_root.index, leaves)))
-            for n in leaves:
-                mini_batches_dep_g.remove_node(n)
-        self.fetch_order = level
-
-        if self._check_saved():
-            self._database = torch.load('tree_data.pt')
+        if os.path.exists(self.d_name + '.feature.pt'):
+            self._database = torch.load(self.d_name + '.feature.pt')
             for i in self._database.keys():
                 self._database[i] = torch.nn.functional.normalize(self._database[i].float(), p=2, dim=-1)
-            self.path_sim_matrix = torch.load('path_sim_maj.pt')
-
-            # import clip
-            # m, prep = clip.load('ViT-B/32')
-            # img_path = '/data/home10b/xw/imagenet21k/imagenet_images'
-            # for i, d in self._database.items():
-            #     if d.shape[0] < 101:
-            #         name = self.names[i]
-            #         imgs = [os.path.join(img_path, name, i) for i in os.listdir(os.path.join(img_path, name))]
-            #         imgs = torch.cat(batch_load_img(imgs, prep, 101 - d.shape[0]))
-            #         with torch.no_grad():
-            #             imgs_embedding = m.encode_image(imgs.cuda()).cpu()
-            #         self._database[i] = torch.cat([d, imgs_embedding])
-            #         if self._database[i].shape[0] < 101:
-            #             print(self.names[i])
-            # torch.save(self._database, 'tree_data.pt')
-
         else:
             import clip
             m, prep = clip.load('ViT-B/32')
@@ -259,20 +198,25 @@ class TreeSet(Dataset):
                 cat_ = torch.cat([text_embedding, imgs_embedding])
 
                 self._database[n] = cat_
-            torch.save(self._database, 'tree_data.pt')
+            torch.save(self._database, self.d_name + '.feature.pt')
 
+        if os.path.exists(self.d_name + '.pathsim.pt'):
+            self.path_sim_matrix = torch.load(self.d_name + '.pathsim.pt')
+        else:
             self.path_sim_matrix = torch.zeros(len(self._database), len(self._database))
+            print("generating path sim mat")
 
             def cal_sim(comb):
+                r, c = comb
                 # path_sim: a matrix containing all train pairs with whole id
-                self.path_sim_matrix[comb[0], comb[1]] = self.path_sim(comb[0], comb[1])
-                self.path_sim_matrix[comb[1], comb[0]] = self.path_sim_matrix[comb[0], comb[1]]
+                self.path_sim_matrix[r, c] = self.path_sim(r, c)
+                self.path_sim_matrix[c, r] = self.path_sim_matrix[r, c]
 
             for comb in tqdm(combinations(list(self._tree.nodes()), r=2)):
                 cal_sim(comb)
 
             # list(map(cal_sim, combinations(self._tree.nodes(), r=2)))
-            torch.save(self.path_sim_matrix, 'path_sim_maj.pt')
+            torch.save(self.path_sim_matrix, self.d_name + '.pathsim.pt')
 
     def __len__(self):
         if self.mode == 'train':
@@ -327,20 +271,8 @@ class TreeSet(Dataset):
     # def generate_struct_text(self, p, q, c):
     #     len()
 
-    def extract_ego_tree(self, n, q):
-        s = list(self._tree.successors(n))
-        s.remove(q) if q in s else None
-        node_features = [self._database[n][0].unsqueeze(0)]
-
-        for _s in s:
-            node_features.append(self._database[_s][0].unsqueeze(0))
-
-        edge = [] if len(s) == 0 else [[0, i] for i in range(1, len(s))]
-
-        return node_features, edge
-
     def sample_train_pairs(self, q, num, pos_num=1):
-        pos = random.sample(self.node2pairs[q], k=pos_num)
+        pos = random.sample(self.node2pairs[q], k=pos_num) if pos_num <= len(self.node2pairs[q]) else self.node2pairs[q]
 
         # neg = [list(e) for e in self.edges if e[0] != q and e[1] != q and e not in self.node2pairs[q]]
         remain = num - len(pos)
@@ -372,50 +304,8 @@ class TreeSet(Dataset):
             l[0] = r in self.node2pairs[q]
             labels.append(l)
             reaches.append(rea)
-        return torch.Tensor(rest), torch.Tensor(labels), torch.Tensor(reaches), torch.Tensor(sims)
+        return rest, torch.Tensor(labels), torch.Tensor(reaches), torch.Tensor(sims)
 
-    # def __getitem__(self, idx):
-    #     if self.mode == 'eval':
-    #         return self._database[self.eva[idx]].float(), nx.shortest_path(
-    #             self.whole, 0, self.eva[idx]), self.eva[idx]
-    #     if self.mode == 'test':
-    #         return self._database[self.test[idx]].float(), nx.shortest_path(
-    #             self.whole, 0, self.test[idx]), self.test[idx]
-    #
-    #     # q = self.train[idx]
-    #     # pairs, labels = self.sample_train_pairs(q, 10)
-    #     # eq = self._database[q].unsqueeze(0)
-    #     # embeds = []
-    #     # for p in pairs:
-    #     #     f = self._database[p[0].item()].unsqueeze(0)
-    #     #     s = self._database[p[1].item()].unsqueeze(0) if p[1] != -1 else torch.zeros_like(f)
-    #     #     embeds.append(torch.cat([eq, f, s]).unsqueeze(0))
-    #     #
-    #     # embeds = torch.cat(embeds).float()
-    #     # return embeds, torch.Tensor(labels)
-    #     l = []
-    #     for _ in self.fetch_order:
-    #         l += _
-    #
-    #     g = self.mini_batches[l[idx]]
-    #     leaves = self._get_leaves(g)
-    #     node_feature_list = []
-    #     old_to_new_label_lookup = {}
-    #     new_to_old_label_lookup = []
-    #     for i, node in enumerate(g.nodes()):
-    #         old_to_new_label_lookup[node] = i
-    #         new_to_old_label_lookup.append(node)
-    #         node_feature_list.append(self._database[node].unsqueeze(0))
-    #     new_g = nx.relabel_nodes(g, old_to_new_label_lookup)
-    #     leaves_embeds = dict(
-    #         (old_to_new_label_lookup[k], self.fused_embeddings[k]) for k in leaves if k in self.fused_embeddings.keys())
-    #
-    #     path_sim = self.path_sim_matrix[new_to_old_label_lookup][:, new_to_old_label_lookup]
-    #
-    #     # old: label in original tree, new: range from 0 to len(g)
-    #     # new_g and node_feature_list are one-to-one
-    #     return new_g, torch.cat(
-    #         node_feature_list), leaves_embeds, old_to_new_label_lookup, new_to_old_label_lookup, path_sim
     def __getitem__(self, idx):
         if self.mode == 'eval':
             return self._database[self.eva[idx]].float(), nx.shortest_path(
@@ -426,22 +316,24 @@ class TreeSet(Dataset):
         else:
             idx += 1
             anchor = self.train[idx]
-            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 32)
-            assert labels[:, 0].sum() == 1
+            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 16)
+            # assert labels[:, 0].sum() == 1
             embeds = []
             sims = []
             anchor_embed = self._database[anchor][0].unsqueeze(0)
-            i_idx = [False] * 32
+            i_idx = [False] * 16
             for i, s in enumerate(samples):
                 i_idx[i] = s[1] != -1
-                _f = self._database[s[0].item()][0].unsqueeze(0)
-                _s = self._database[s[1].item()][0].unsqueeze(0) if s[1] != -1 else torch.zeros_like(_f)
-                embeds.append(torch.cat([anchor_embed, _f, _s]).unsqueeze(0))
+                # _f = self._database[s[0].item()][0].unsqueeze(0)
+                # _s = self._database[s[1].item()][0].unsqueeze(0) if s[1] != -1 else torch.zeros_like(_f)
+                # embeds.append(torch.cat([anchor_embed, _f, _s]).unsqueeze(0))
                 sims.append(
-                    torch.Tensor([self.path_sim_matrix[s[0].int().item(), anchor],
-                                  self.path_sim_matrix[anchor, s[1].int().item()]]).unsqueeze(0))
-
-            return torch.cat(embeds), labels, torch.cat(sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
+                    torch.Tensor([self.path_sim_matrix[s[0], anchor],
+                                  self.path_sim_matrix[anchor, s[1]]]).unsqueeze(0))
+            p_datas, c_datas = self.generate_pyg_data(samples, anchor)
+            return anchor_embed, p_datas, c_datas, labels, torch.cat(
+                sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
+            # return torch.cat(embeds), labels, torch.cat(sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
 
 
 if __name__ == "__main__":

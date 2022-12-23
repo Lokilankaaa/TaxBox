@@ -10,7 +10,7 @@ import clip
 import random
 import torch.nn.functional as F
 import multiprocessing as mp
-from itertools import combinations
+from itertools import combinations, zip_longest
 import math
 from typing import Union
 import re
@@ -402,6 +402,31 @@ def rearrange(energy_scores, candidate_position_idx, true_position_idx):
     labels = torch.cat((torch.ones(len(correct)), torch.zeros(len(incorrect)))).int()
     energy_scores = torch.cat((energy_scores[correct], energy_scores[incorrect]))
     return energy_scores, labels
+
+
+
+
+
+def grouper(iterable, n, fillvalue=None):
+    "Collect data into fixed-length chunks or blocks"
+    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
+    args = [iter(iterable)] * n
+    return zip_longest(*args, fillvalue=fillvalue)
+
+
+def collate(batch):
+    q, pp, pc, l, s, r, i, rs = [], [], [], [], [], [], [], []
+    for b in batch:
+        query_embed, p_datas, c_datas, labels, sims, reaches, i_idx, rank_sims = b
+        q.append(query_embed)
+        pp.append(p_datas)
+        pc.append(c_datas)
+        l.append(labels.unsqueeze(0))
+        s.append(sims.unsqueeze(0))
+        r.append(reaches.unsqueeze(0))
+        i.append(i_idx.unsqueeze(0))
+        rs.append(rank_sims.unsqueeze(0))
+    return torch.cat(q), pp, pc, torch.cat(l), torch.cat(s), torch.cat(r), torch.cat(i), torch.cat(rs)
 
 
 def extract_feature(_model: torch.nn.Module, preprocess, imgs: Union[str, List[str]], label, device):

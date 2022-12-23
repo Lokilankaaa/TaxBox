@@ -12,6 +12,10 @@ from transformers import ViltModel, ViltConfig, BertConfig, BertModel
 from utils.graph_operate import transitive_closure_mat, adj_mat
 from utils.loss import adaptive_BCE
 from torch import nn
+from torch_geometric.nn import GATv2Conv, GCNConv
+import torch_geometric.utils as gutils
+from torch_geometric.data import Data, Batch
+from itertools import chain
 
 
 class TMN(nn.Module):
@@ -500,7 +504,13 @@ class TMNModel(torch.nn.Module):
 class BoxTax(torch.nn.Module):
     def __init__(self, hidden_size, box_dim):
         super(BoxTax, self).__init__()
-        self.box_decoder = HighwayNetwork(hidden_size, box_dim, 2)
+        # self.embedding = nn.Embedding.from_pretrained()
+        self.fusion_module = nn.ModuleList([
+            GATv2Conv(hidden_size, hidden_size, dropout=0.1, heads=4, concat=False),
+        ])
+        self.activation = nn.LeakyReLU(0.1)
+        self.box_decoder_k = HighwayNetwork(hidden_size, box_dim, 2)
+        self.box_decoder_q = HighwayNetwork(hidden_size, box_dim, 2)
         self.i_scorer = InsertionScorer
         self.a_scorer = AttachScorer
 
@@ -516,11 +526,36 @@ class BoxTax(torch.nn.Module):
 
         return scores
 
-    def forward(self, x, i_idx):
-        # x: b * 3 * hidden_size
+    def form_batch_graph(self, g, device):
+        g = list(chain.from_iterable(g))
+        idx = [0]
+        for i, _g in enumerate(g):
+            idx.append(_g.x.shape[0] + idx[i])
+        return Batch.from_data_list(g).to(device), torch.Tensor(idx[:-1]).long().to(device)
 
-        boxes = self.box_decoder(x)
+    def forward_graph(self, g):
+        x, edge_index = g.x, g.edge_index
+        for layer in self.fusion_module:
+            x = layer(x, edge_index)
+            x = self.activation(x)
+        return x
 
+    def forward(self, query, p_datas, c_datas, i_idx):
+        p_batch_graph, p_idx = self.form_batch_graph(p_datas, query.device)
+        c_batch_graph, c_idx = self.form_batch_graph(c_datas, query.device)
+
+        fused_p = self.forward_graph(p_batch_graph)
+        fused_c = self.forward_graph(c_batch_graph)
+
+        b, d = query.shape
+        p = fused_p[p_idx].reshape(b, -1, d).unsqueeze(2)
+        c = fused_c[c_idx].reshape(b, -1, d).unsqueeze(2)
+        q = query.unsqueeze(1).unsqueeze(1).expand(p.shape)
+        fused = torch.cat([p, c], dim=-2)
+        #####
+        boxes = self.box_decoder_k(fused)
+        q = self.box_decoder_q(q)
+        boxes = torch.cat([q, boxes], dim=-2)
         q, p, c = boxes.chunk(3, -2)
         q, p, c = q.squeeze(-2), p.squeeze(-2), c.squeeze(-2)
 

@@ -35,11 +35,13 @@ class TreeMetric:
     def show_results(self):
         rank_positions = np.array(list(itertools.chain(*self.ranks)))
         return {
-            'hit10': np.sum(rank_positions <= 10) / len(rank_positions),
-            'hit5': np.sum(rank_positions <= 5) / len(rank_positions),
-            'hit3': np.sum(rank_positions <= 3) / len(rank_positions),
             'hit1': np.sum(rank_positions <= 1) / len(rank_positions),
-            'mrr': (1 / np.array(list(itertools.chain(*self.ranks)))).mean(),
+            'hit5': np.sum(rank_positions <= 5) / len(rank_positions),
+            'hit10': np.sum(rank_positions <= 10) / len(rank_positions),
+            'pre1': np.sum(rank_positions <= 1) / len(self.ranks),
+            'pre5': np.sum(rank_positions <= 5) / len(self.ranks) / 5,
+            'pre10': np.sum(rank_positions <= 10) / len(self.ranks) / 10,
+            'mrr': (1 / np.ceil(np.array(list(itertools.chain(*self.ranks))) / 10)).mean(),
             'macro_mr': np.array([np.array(rank).mean() for rank in self.ranks]).mean(),
             'micro_mr': rank_positions.mean(),
             'wup': np.array(self.wp).mean(),

@@ -348,7 +348,8 @@ def InsertionScorer(q, f, s):
     # cen_q = torch.nn.functional.normalize(center_of(q, True), dim=-1)
     # cen_f = torch.nn.functional.normalize(center_of(f, True), dim=-1)
     # sim = (cen_q * cen_f).sum(-1).abs()
-    return prob_f_given_q * prob_q_given_s
+
+    return prob_f_given_q, prob_q_given_s
 
 
 def AttachScorer(q, f):
@@ -502,29 +503,46 @@ class TMNModel(torch.nn.Module):
 
 
 class BoxTax(torch.nn.Module):
-    def __init__(self, hidden_size, box_dim):
+    def __init__(self, hidden_size, box_dim, graph_embed=True):
         super(BoxTax, self).__init__()
-        # self.embedding = nn.Embedding.from_pretrained()
+        self.graph_embed = graph_embed
         self.fusion_module = nn.ModuleList([
             GATv2Conv(hidden_size, hidden_size, dropout=0.1, heads=4, concat=False),
         ])
         self.activation = nn.LeakyReLU(0.1)
         self.box_decoder_k = HighwayNetwork(hidden_size, box_dim, 2)
         self.box_decoder_q = HighwayNetwork(hidden_size, box_dim, 2)
-        self.i_scorer = InsertionScorer
-        self.a_scorer = AttachScorer
+        self.scorer = InsertionScorer
+        # self.a_scorer = AttachScorer
+
 
     def mul_sim(self, scores, q, p, c, i_idx):
-        # scores: b * l, q,p,c: b*l*d
+        # scores: 2 * b * l, q,p,c: b*l*d
+        s1, s2 = scores
+
+        s1 = s1.squeeze(-1)
+        s2 = s2.squeeze(-1)
+
+        if s1.dim() == 1:
+            s1 = s1.unsqueeze(0)
+            s2 = s2.unsqueeze(0)
+
         cen_q = center_of(q, True)
         cen_p = center_of(p, True)
         cen_c = center_of(c, True)
         dis_qp = torch.nn.Softmax(dim=-1)(1 / torch.norm(cen_p - cen_q, p=2, dim=-1))
         dis_qc = torch.nn.Softmax(dim=-1)(1 / torch.norm(cen_c - cen_q, p=2, dim=-1))
-        scores[i_idx] *= dis_qc[i_idx]
-        scores *= dis_qp
-
-        return scores
+        # scores[i_idx] *= dis_qc[i_idx]
+        # scores *= dis_qp
+        #
+        # return scores
+        s1 *= dis_qp
+        s2[torch.logical_not(i_idx)] = 1
+        s2[i_idx] *= dis_qc[i_idx]
+        if self.training:
+            return s1 * s2, s1, s2
+        else:
+            return s1 * s2
 
     def form_batch_graph(self, g, device):
         g = list(chain.from_iterable(g))
@@ -544,8 +562,12 @@ class BoxTax(torch.nn.Module):
         p_batch_graph, p_idx = self.form_batch_graph(p_datas, query.device)
         c_batch_graph, c_idx = self.form_batch_graph(c_datas, query.device)
 
-        fused_p = self.forward_graph(p_batch_graph)
-        fused_c = self.forward_graph(c_batch_graph)
+        if self.graph_embed:
+            fused_p = self.forward_graph(p_batch_graph)
+            fused_c = self.forward_graph(c_batch_graph)
+        else:
+            fused_p = p_batch_graph.x[p_idx]
+            fused_c = c_batch_graph.x[c_idx]
 
         b, d = query.shape
         p = fused_p[p_idx].reshape(b, -1, d).unsqueeze(2)
@@ -559,13 +581,7 @@ class BoxTax(torch.nn.Module):
         q, p, c = boxes.chunk(3, -2)
         q, p, c = q.squeeze(-2), p.squeeze(-2), c.squeeze(-2)
 
-        i_scores = self.i_scorer(q[i_idx], p[i_idx], c[i_idx])
-        a_scores = self.a_scorer(q[torch.logical_not(i_idx)], p[torch.logical_not(i_idx)])
-
-        scores = torch.zeros(boxes.shape[:2]).to(q.device)
-        scores[i_idx] += i_scores
-        scores[torch.logical_not(i_idx)] += a_scores
-
+        scores = self.scorer(q, p, c)
         scores = self.mul_sim(scores, q, p, c, i_idx)
 
         return boxes, scores

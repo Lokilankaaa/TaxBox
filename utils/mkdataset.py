@@ -6,6 +6,7 @@ from collections import deque
 from copy import deepcopy
 from itertools import chain
 
+import clip
 import openai
 import tqdm
 import requests
@@ -24,12 +25,12 @@ def mkdataset_tmn(path_meta, path_data, dir):
     whole, g, names, descriptions, train, eva, test = d['whole'], d['g'], d['names'], d['descriptions'], d['train'], d[
         'eva'], d['test']
     embeddings = torch.load(path_data)
-    terms_dir = os.path.join(dir, 'wn.terms')
-    taxo_dir = os.path.join(dir, 'wn.taxo')
-    embed_dir = os.path.join(dir, 'wn.terms.clip.embed')
-    train_dir = os.path.join(dir, 'wn.terms.train')
-    val_dir = os.path.join(dir, 'wn.terms.validation')
-    test_dir = os.path.join(dir, 'wn.terms.test')
+    terms_dir = os.path.join(dir + '.terms')
+    taxo_dir = os.path.join(dir + '.taxo')
+    embed_dir = os.path.join(dir + '.terms.embed')
+    train_dir = os.path.join(dir + '.terms.train')
+    val_dir = os.path.join(dir + '.terms.validation')
+    test_dir = os.path.join(dir + '.terms.test')
 
     with open(terms_dir, 'w') as f:
         for n in train + test + eva:
@@ -40,7 +41,7 @@ def mkdataset_tmn(path_meta, path_data, dir):
             f.write('{}\t{}\n'.format(e[0], e[1]))
 
     with open(embed_dir, 'w') as f:
-        f.write('{} {}\n'.format(len(names), 512))
+        f.write('{} {}\n'.format(len(names), embeddings[0].shape[-1]))
         for n in train + test + eva:
             line = str(n) + ' ' + ' '.join(map(lambda x: str(x), embeddings[n][0].numpy().tolist())) + '\n'
             f.write(line)
@@ -125,7 +126,8 @@ def _get_holdout_subgraph(g, node_ids):
             checkset = successors1.intersection(successors2)
             if checkset:
                 for s in checkset:
-                    subgraph.remove_edge(node, s)
+                    if subgraph.in_degree(s) > 1:
+                        subgraph.remove_edge(node, s)
     return subgraph
 
 
@@ -138,7 +140,8 @@ def remove_multiparents(graph):
         list(graph.remove_edge(p[0], p[1]) for p in edges)
     return graph
 
-def mk_dataset_from_pickle(load_path, d_name):
+
+def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
     import pickle
     import numpy as np
     with open(load_path, 'rb') as fin:
@@ -172,11 +175,33 @@ def mk_dataset_from_pickle(load_path, d_name):
         whole_g = nx.relabel_nodes(whole_g, relabel)
 
     whole_g = nx.DiGraph(whole_g)
-    whole_g = remove_multiparents(whole_g)
+    # whole_g = remove_multiparents(whole_g)
     tree = _get_holdout_subgraph(whole_g, train)
+
+    # model, _ = clip.load('ViT-B/32', device='cuda')
+    # model.eval()
+    # descriptions = {}
+    # for i, name in tqdm.tqdm(enumerate(names), desc='gen des'):
+    #     sen = wn.synsets(name.replace(' ', '_'), pos=wn.NOUN)
+    #     if len(sen) != 0:
+    #         sen = sen[0].definition()
+    #     else:
+    #         try:
+    #             sen = wikipedia.summary(name, sentences=1)
+    #         except:
+    #             sen = name
+    #     descriptions[i] = sen
+
+    # features = {}
+    # for k, v in enumerate(tqdm.tqdm(names, desc='gen emb')):
+    #     with torch.no_grad():
+    #         features[k] = model.encode_text(clip.tokenize(v).cuda())
+    features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
     res = {'g': tree, 'whole': whole_g, 'train': train, 'test': test, 'eva': val,
            'names': names, 'descriptions': None}
-    features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
+    if two_emb:
+        plain_features = {i: f.unsqueeze(0) for i, f in enumerate(data['g_full'].ndata['y'])}
+        torch.save(plain_features, d_name + '.pfeature.pt')
 
     torch.save(res, d_name + '.pt')
     torch.save(features, d_name + '.feature.pt')
@@ -504,6 +529,25 @@ def interactive_json_maker():
     save()
 
 
+def fast_embed(data_path):
+    import fasttext
+    import fasttext.util
+    # fasttext.util.download_model('en', if_exists='ignore')  # English
+    ft = fasttext.load_model('/data/home10b/xw/visualCon/QEN-main/crawl-300d-2M-subword.bin')
+    with open(data_path, 'r') as f:
+        lines = f.readlines()
+    words = list(map(lambda x: x.split('\t')[-1].split('@')[0], lines))
+    ids = list(map(lambda x: x.split('\t')[0], lines))
+    embeds = list(map(lambda x: ft[x], words))
+    res = str(len(embeds)) + ' 300\n'
+    with open(data_path.replace('terms', 'embed'), 'w') as f:
+        f.writelines(res)
+        for i, e in tqdm.tqdm(zip(ids, embeds)):
+            assert e.sum() != 0
+            res = str(i) + ' ' + ' '.join(map(str, e.tolist())) + '\n'
+            f.writelines(res)
+
+
 word_count = None
 if __name__ == '__main__':
     # word_count = json.load(open('wordnet_count.json'))
@@ -529,5 +573,8 @@ if __name__ == '__main__':
     # t = TreeSet(G, names, descriptions)
     # mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
     #               '/data/home10b/xw/visualCon/TMN-main/data/mywn')
-    mk_dataset_from_pickle('/data/home10b/xw/visualCon/TMN-main/data/MAG-CS/computer_science.pickle.bin',
-                           '../mag_cs')
+    mk_dataset_from_pickle('/data/home10b/xw/visualCon/TMN-main/data/mesh/mesh.pickle.bin',
+                           '../mesh', False)
+    # mkdataset_tmn('/data/home10b/xw/visualCon/wn_food.pt', '/data/home10b/xw/visualCon/wn_food.feature.pt',
+    #               '/data/home10b/xw/visualCon/TMN-main/data/SemEval-Food/semeval_food.pickle.bin')
+    # fast_embed('/data/home10b/xw/visualCon/TMN-main/data/mesh/mesh.terms')

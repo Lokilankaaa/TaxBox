@@ -50,7 +50,8 @@ class TreeSet(Dataset):
         self.max_depth = 0
         self.mean_depth = 0
         self.mean_order = 0
-        self._database = {}
+        self.embeds = {}
+        self.pembeds = {}
         self.fused_embeddings = {}
         self.path_sim_matrix = None
         self.node2pairs = {}
@@ -101,7 +102,7 @@ class TreeSet(Dataset):
         self.generate_node2descendants()
         self.generate_edges()
 
-    def generate_pyg_data(self, samples, q):
+    def generate_pyg_data(self, samples, q, sample_num=100):
         p_datas, c_datas = [], []
         for s in samples:
             p, c = s
@@ -111,11 +112,16 @@ class TreeSet(Dataset):
                 pc.remove(q)
             if q in cc:
                 cc.remove(q)
-            p_features = [self._database[n][0].unsqueeze(0) for n in [p] + pc]
+            if 0 < sample_num < len(pc):
+                pc = random.sample(pc, sample_num)
+            if 0 < sample_num < len(cc):
+                cc = random.sample(cc, sample_num)
+            p_features = [self.embeds[n][0].unsqueeze(0) for n in [p] + pc]
             p_edge = [[1 + i, 0] for i in range(len(pc))] + [[0, 0]]
             p_data = Data(x=torch.cat(p_features), edge_index=torch.Tensor(p_edge).t().contiguous().int())
 
-            c_features = [self._database[n][0].unsqueeze(0) if n != -1 else torch.zeros_like(self._database[0]) for n in [c] + cc]
+            c_features = [self.embeds[n][0].unsqueeze(0) if n != -1 else torch.zeros_like(self.embeds[0]) for n in
+                          [c] + cc]
             c_edge = [[1 + i, 0] for i in range(len(cc))] + [[0, 0]]
             c_data = Data(x=torch.cat(c_features), edge_index=torch.Tensor(c_edge).t().contiguous().int())
 
@@ -124,6 +130,7 @@ class TreeSet(Dataset):
 
     def generate_edges(self):
         candidates = set(chain.from_iterable([[(n, d) for d in ds] for n, ds in self.node2descendant.items()]))
+        print(len(candidates))
         self.edges = candidates  # list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
 
     def generate_node2pairs(self):
@@ -170,9 +177,9 @@ class TreeSet(Dataset):
 
     def _process(self):
         if os.path.exists(self.d_name + '.feature.pt'):
-            self._database = torch.load(self.d_name + '.feature.pt')
-            for i in self._database.keys():
-                self._database[i] = torch.nn.functional.normalize(self._database[i].float(), p=2, dim=-1)
+            self.embeds = torch.load(self.d_name + '.feature.pt')
+            for i in self.embeds.keys():
+                self.embeds[i] = torch.nn.functional.normalize(self.embeds[i].float(), p=2, dim=-1)
         else:
             import clip
             m, prep = clip.load('ViT-B/32')
@@ -197,13 +204,18 @@ class TreeSet(Dataset):
                     imgs_embedding = m.encode_image(imgs.cuda()).cpu()
                 cat_ = torch.cat([text_embedding, imgs_embedding])
 
-                self._database[n] = cat_
-            torch.save(self._database, self.d_name + '.feature.pt')
+                self.embeds[n] = cat_
+            torch.save(self.embeds, self.d_name + '.feature.pt')
+
+        if os.path.exists(self.d_name + '.pfeature.pt'):
+            self.pembeds = torch.load(self.d_name + '.pfeature.pt')
+            for i in self.pembeds.keys():
+                self.pembeds[i] = torch.nn.functional.normalize(self.pembeds[i].float(), p=2, dim=-1)
 
         if os.path.exists(self.d_name + '.pathsim.pt'):
             self.path_sim_matrix = torch.load(self.d_name + '.pathsim.pt')
         else:
-            self.path_sim_matrix = torch.zeros(len(self._database), len(self._database))
+            self.path_sim_matrix = torch.zeros(len(self.embeds), len(self.embeds))
             print("generating path sim mat")
 
             def cal_sim(comb):
@@ -289,39 +301,33 @@ class TreeSet(Dataset):
         reaches = []  # q in p, p in q, c in q, q in c
         rest.insert(random.randint(0, len(rest) - 1), pos[0])
         for r in rest:
-            l = [0, 0, 0]
-            rea = [0, 0, 0, 0]
-            if r[0] in self.node2ancestor[q]:
-                l[1] = 1
-                rea[0] = 1
-            if r[0] in self.node2descendant[q]:
-                rea[1] = 1
-            if r[1] in self.node2descendant[q]:
-                l[2] = 1
-                rea[2] = 1
-            if r[1] in self.node2ancestor[q]:
-                rea[3] = 1
-            l[0] = r in self.node2pairs[q]
+            l = [r in self.node2pairs[q], r[0] == pos[0][0], r[1] == pos[0][1]]
+            rea = [r[0] in self.node2ancestor[q], r[0] in self.node2descendant[q],
+                   r[1] in self.node2descendant[q], r[1] in self.node2ancestor[q]]
             labels.append(l)
             reaches.append(rea)
-        return rest, torch.Tensor(labels), torch.Tensor(reaches), torch.Tensor(sims)
+        return rest, torch.Tensor(labels).int(), torch.Tensor(reaches).int(), torch.Tensor(sims)
 
     def __getitem__(self, idx):
         if self.mode == 'eval':
-            return self._database[self.eva[idx]].float(), nx.shortest_path(
+            anchor = self.eva[idx]
+            return self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][0].unsqueeze(
+                0), nx.shortest_path(
                 self.whole, 0, self.eva[idx]), self.node2pairs[self.eva[idx]]
         elif self.mode == 'test':
-            return self._database[self.test[idx]].float(), nx.shortest_path(
+            anchor = self.test[idx]
+            return self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][0].unsqueeze(
+                0), nx.shortest_path(
                 self.whole, 0, self.test[idx]), self.node2pairs[self.test[idx]]
         else:
             idx += 1
             anchor = self.train[idx]
-            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 16)
+            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 32)
             # assert labels[:, 0].sum() == 1
-            embeds = []
             sims = []
-            anchor_embed = self._database[anchor][0].unsqueeze(0)
-            i_idx = [False] * 16
+            anchor_embed = self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][
+                0].unsqueeze(0)
+            i_idx = [False] * 32
             for i, s in enumerate(samples):
                 i_idx[i] = s[1] != -1
                 # _f = self._database[s[0].item()][0].unsqueeze(0)

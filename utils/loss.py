@@ -265,16 +265,25 @@ def adaptive_BCE(pair_nodes, b_boxes, tree, path_sim):
     return res.mean() + regularization_loss(b_boxes.reshape(-1, b_boxes.shape[-1]))
 
 
-def insertion_loss(scores, labels):
-    s1 = scores
+def insertion_loss(scores, labels, i_idx):
+    s1, s2, s3 = scores
     if s1.dim() == 2:
         s1 = s1.squeeze(-1)
+        s2 = s2.squeeze(-1)
+        s3 = s3.squeeze(-1)
 
-    weights = labels[:, :, 0] * 10
-    weights[weights == 0] = 1
-    loss_fn = torch.nn.BCELoss(weight=weights)
+    w1 = labels[:, :, 0] * 10
+    w1[w1 == 0] = 1
+    w2 = labels[:, :, 1] * 10
+    w2[w2 == 0] = 1
+    w3 = labels[:, :, 2] * 10
+    w3[w3 == 0] = 1
+    loss_fn = torch.nn.BCELoss(weight=w1)
+    loss_fn2 = torch.nn.BCELoss(weight=w2)
+    loss_fn3 = torch.nn.BCELoss(weight=w3[i_idx])
 
-    return loss_fn(s1, labels[:, :, 0])  # + loss_fn(s2, labels[:, 1]) + loss_fn(s3, labels[:, 2])
+    return loss_fn(s1, labels[:, :, 0].float()) + 0.5 * loss_fn2(s2, labels[:, :, 1].float()) +  loss_fn3(
+        0.5 * s3[i_idx], labels[:, :, 2][i_idx].float())
 
 
 def attachment_loss(scores, labels):
@@ -285,7 +294,7 @@ def attachment_loss(scores, labels):
 
     weights = labels[:, 0] * 10
     weights[weights == 0] = 1
-    loss_fn = torch.nn.BCELoss()
+    loss_fn = torch.nn.BCELoss(weight=weights)
 
     return loss_fn(s1, labels[:, 0])  # + (labels[:, 0] * (r1 < 0) * r1.abs()).mean()
 
@@ -308,12 +317,21 @@ def box_constraint_loss(boxes, sims, reaches):
 
     def push_away_sim_center(a, b, sim, com=False):
         epsilon = torch.Tensor([1e-8]).to(a.device)
-        cen_a = center_of(a, True)
-        cen_b = center_of(b, True)
-        probs = torch.sigmoid(1 / torch.norm(cen_a - cen_b, p=2, dim=-1))
+        cen_a = torch.nn.functional.normalize(center_of(a, True), dim=-1)
+        cen_b = torch.nn.functional.normalize(center_of(b, True), dim=-1)
+        probs = (cen_a * cen_b).sum(-1).abs()
 
-        return 0.1 * torch.max(torch.zeros_like(a[:, 0]),
-                               probs - 0.7)
+        return torch.max(torch.zeros_like(a[:, 0]),
+                         -torch.log(1 - probs + epsilon) + torch.log(1 - sim if not com else (1 - epsilon)))
+
+    # def push_away_sim_center(a, b, sim, com=False):
+    #     epsilon = torch.Tensor([1e-8]).to(a.device)
+    #     cen_a = center_of(a, True)
+    #     cen_b = center_of(b, True)
+    #     probs = torch.norm(cen_a - cen_b, p=2, dim=-1)
+    #
+    #     return 0.1 * torch.max(torch.zeros_like(a[:, 0]),
+    #                            sim - probs)
 
     # q in p
     _idx = reaches[:, 0].bool()
@@ -330,15 +348,15 @@ def box_constraint_loss(boxes, sims, reaches):
     # p not in q, q not in p
     _idx = torch.logical_not((reaches[:, 0] * reaches[:, 1]).bool())
     loss[_idx] = _not_in_(p[_idx], q[_idx], sims[_idx, 0], True) + _not_in_(q[_idx], p[_idx], sims[_idx, 0],
-                                                                            True) #+ push_away_sim_center(q[_idx],
-                                                                                                        #p[_idx],
-                                                                                                         #sims[_idx, 0])
+                                                                            True) + push_away_sim_center(q[_idx],
+                                                                                                         p[_idx],
+                                                                                                         sims[_idx, 0])
     # c not in q, q not in c
     _idx = torch.logical_not((reaches[:, 2] * reaches[:, 3]).bool())
     loss[_idx] = _not_in_(c[_idx], q[_idx], sims[_idx, 1], True) + _not_in_(q[_idx], c[_idx], sims[_idx, 1],
-                                                                            True) #+ push_away_sim_center(q[_idx],
-                                                                                                         #c[_idx],
-                                                                                                         #sims[_idx, 0])
+                                                                            True) + push_away_sim_center(q[_idx],
+                                                                                                         c[_idx],
+                                                                                                         sims[_idx, 0])
 
     return loss.mean() + regularization_loss(boxes.reshape(-1, boxes.shape[-1]))
 

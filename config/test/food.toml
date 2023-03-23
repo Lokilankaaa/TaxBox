@@ -1,0 +1,13 @@
+[MODEL]
+model_path = 'model64_wnf_s16.pth'
+hidden_size = 300
+box_dim = 64
+graph_embed = true
+
+embed_type = 'fasttext'
+embedding_path = '/data/home10b/xw/visualCon/QEN-main/crawl-300d-2M-subword.bin'
+
+[DATASET]
+dataset_name = 'wordnet_food'
+data_path = 'wn_food.pt'
+

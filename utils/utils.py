@@ -1,4 +1,8 @@
+import json
 from typing import Union, List
+
+import networkx
+import requests
 from PIL import Image
 from matplotlib import pyplot as plt
 from scipy.stats import gaussian_kde, norm, kurtosis
@@ -14,6 +18,7 @@ from itertools import combinations, zip_longest
 import math
 from typing import Union
 import re
+import itertools
 
 EPS = 1e-13
 
@@ -260,7 +265,7 @@ def softplus(x, t):
     return F.softplus(x, t)
 
 
-def soft_volume(x: torch.Tensor, t=10, box_mode=False):
+def soft_volume(x: torch.Tensor, t=8, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     # assert x.dim() == 2
@@ -378,7 +383,7 @@ def obtain_ranks(outputs, targets):
     """
     calculate_ranks = calculate_ranks_from_similarities
     all_ranks = []
-    prediction = outputs.cpu().numpy().squeeze()
+    prediction = outputs.cpu().detach().numpy().squeeze()
     label = targets.cpu().numpy()
     sep = np.array([0, 1], dtype=label.dtype)
 
@@ -392,7 +397,7 @@ def obtain_ranks(outputs, targets):
         positive_relations = list(np.where(labels == 1)[0])
         ranks = calculate_ranks(distances, positive_relations)
         all_ranks.append(ranks)
-    return all_ranks
+    return list(itertools.chain(all_ranks))
 
 
 def rearrange(energy_scores, candidate_position_idx, true_position_idx):
@@ -402,9 +407,6 @@ def rearrange(energy_scores, candidate_position_idx, true_position_idx):
     labels = torch.cat((torch.ones(len(correct)), torch.zeros(len(incorrect)))).int()
     energy_scores = torch.cat((energy_scores[correct], energy_scores[incorrect]))
     return energy_scores, labels
-
-
-
 
 
 def grouper(iterable, n, fillvalue=None):
@@ -530,6 +532,186 @@ def retrieve_model(model_name, device):
 
     _model.eval().to(device)
     return _model if model_name != 'clip' else _model.encode_image, _preprocess
+
+
+def partition_array(arr, k):
+    if k <= 0 or len(arr) < k:
+        return None
+
+    flag = True
+    try:
+        arr[:k]
+    except TypeError as e:
+        flag = False
+
+    result = []
+    size = len(arr) // k
+    remainder = len(arr) % k
+    start = 0
+    for i in range(k):
+        end = start + size
+        if remainder > 0:
+            end += 1
+            remainder -= 1
+
+        if flag:
+            t = arr[start:end]
+        else:
+            t = []
+            for j in range(start, end):
+                t.append(arr[j])
+
+        result.append(t)
+        start = end
+    return result
+
+
+def sample_neighbors(taxonomy: networkx.DiGraph, father: str, query: str, max_n: int = 10) -> [str]:
+    """
+    sample neighbors except query node from taxonomy given a node
+    @param taxonomy:
+    @param father:
+    @param query:
+    @param max_n:
+    """
+    children = list(taxonomy.successors(father))
+    children.remove(query) if query in children else None
+    neighbors = random.sample(children, k=max_n) if max_n < len(children) else children
+    return neighbors
+
+
+# instruction = """
+#     The following is a transcript of a conversation between a human and a smart, helpful AI assistant. The AI assistant's responses are based only on its own pre-existing knowledge; it cannot access the internet or other data sources in any way (although it may provide the human with instructions for how to look up or access data if the human wishes to do that themselves). It will never ask the human for highly sensitive private information such as passwords, credit card numbers, social security numbers, and so on.
+#     The human and the AI assistant take turns making statements. Human statements start with ¬Human¬ and AI assistant statements start with ¬AI¬. Complete the transcript in exactly that format, without commentary.
+#     ¬Human¬{}
+#     ¬AI¬
+# """
+
+instruction = {"role": "user", "content": "{}"}
+
+prompt = {
+    'visual': "A concept is considered to be visual if it meets both the following two conditions. "
+              "First, instances of the concept have a physical entity and can be seen in vision and share some common "
+              "visual features."
+              "Second, it is not a place nor a city nor a village nor a brand nor a company nor an abstract concept.\n"
+              "Is {}, {} a visual concept? You just answer yes or no.",
+    'path': "I will give you a list of words that are arranged in a hypernym-hyponym relationship, with each word "
+            "being the hypernym of the latter. They are {}. "
+            "Besides, I will give another list containing words of which {} is hypernym. They are {}. "
+            "Is {} placed the proper position where {} is the hypernym of it and {} are its neighbors? "
+            "You only need to answer [yes or no] without any other words.",
+    'candidate_i': "You're required to judge whether {} is a location of suitable granularity to place {} where {} is "
+                   "the hypernym of {} and {} is hyponym of {}. "
+                   "You only need to answer [yes or no] without any other words.",
+    'candidate_a': "You're required to judge whether {} is a hypernym with proper granularity of {}. "
+                   "You only need to answer [yes or no] without any other words.",
+    'candidate_ib': "I'll give you a list of hypernym-hyponym pairs containing {} pairs which are {}. You're required "
+                    "to judge whether each of them is proper to insert {} where the left is a strict hypernym of {} "
+                    "and the right is a strict hyponym of {}. For each word you are only required to answer [True or "
+                    "False]  and format all the answers as a list like [True,False,True......] in the same order of "
+                    "given list with exactly {} boolean values. Your answers must be consistent with your "
+                    "explanations and output the answer list first.",
+    'candidate_ab': "I'll give you a list of words containing {} words which are {}. You're required to judge whether "
+                    "each of them is a strict hypernym of [{}]. For each word you are only required to answer [True "
+                    "or False]  and format all the answers as a list like [True,False,True......] in the same order "
+                    "of given list with exactly {} boolean values.  Your answers must be consistent with your "
+                    "explanations and output the answer list first."
+}
+
+
+def chatgpt_judge(prompt_type: str, query: [str], neighbors: [str] = None) -> Union[bool, List[bool]]:
+    """
+    function to judge whether a concept is visual and whether it is placed correctly.
+    @param neighbors:
+    @param prompt_type: visual|path
+    @param query: [concept, desc] if visual | [path] if path
+    @return: boolean value
+    """
+    form = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "system", "content": "You are a helpful data annotator."},
+                     {"role": "user", "content": ""}],
+        "max_tokens": 50,
+        "temperature": 0.6,
+        "top_p": 1,
+        "n": 1,
+        "stream": False,
+        "stop": "\r\n"
+    }
+    url = 'http://{}/v1/chat/completions'
+    if prompt_type == 'visual':
+        form['messages'][1]['content'] = prompt[prompt_type].format(query[0], query[1])
+    elif prompt_type == 'path':
+        if neighbors is not None:
+            form['messages'][1]['content'] = prompt[prompt_type].format(query, query[-2], neighbors, query[-1],
+                                                                        query[-2], neighbors)
+    elif prompt_type == 'candidate_i':
+        form['messages'][1]['content'] = prompt[prompt_type].format('<{}, {}>'.format(query[0], query[1]), query[2],
+                                                                    query[0], query[2], query[1], query[2])
+    elif prompt_type == 'candidate_a':
+        form['messages'][1]['content'] = prompt[prompt_type].format(query[0], query[1])
+
+    elif prompt_type == 'candidate_ib':
+        form['messages'][1]['content'] = prompt[prompt_type].format(len(query[1]), query[1], query[0], query[0],
+                                                                    query[0], len(query[1]))
+    elif prompt_type == 'candidate_ab':
+        form['messages'][1]['content'] = prompt[prompt_type].format(len(query[1]), query[1], query[0], len(query[1]))
+
+    cnt = 0
+    while True:
+        try:
+            # max retries = 5
+            if cnt == 5:
+                return False
+            resp = requests.request('POST', url, headers={'Content-Type': 'application/json'}, data=json.dumps(form))
+            if resp.status_code == 200:
+                res = resp.json()['choices'][0]['text']
+                # print(res)
+                if prompt_type == 'path':
+                    return 'yes' in res.lower()
+                elif 'candidate' in prompt_type:
+                    pattern = r'\[.*?\]'
+                    match = re.search(pattern, res)
+                    if match:
+                        list_str = match.group()
+                        result = re.findall(r'(True|False)', list_str)
+                        result = [eval(b) for b in result]
+                        assert len(result) == len(query[1])
+                        return result
+
+        except AssertionError as e:
+            print('AssertionError')
+        except Exception as e:
+            print(e)
+        finally:
+            cnt += 1
+
+
+def rescore_by_chatgpt(scores: torch.Tensor, att_idx: torch.Tensor, ins_idx: torch.Tensor,
+                       dataset: torch.utils.data.Dataset, edges: torch.Tensor, query: str,
+                       k: int = 100) -> torch.Tensor:
+    scores_i = scores[ins_idx]
+    scores_a = scores[att_idx]
+    edges_i = edges[ins_idx, :]
+    edges_a = edges[att_idx, :]
+
+    scores_i_topk_idx = scores_i.topk(k)[1]
+    scores_a_topk_idx = scores_a.topk(k)[1]
+
+    topk_candidates_i = edges_i[scores_i_topk_idx, :]
+    topk_candidates_a = edges_a[scores_a_topk_idx, :]
+
+    topk_candidates_i_names = [(dataset.names[p[0]].split('@')[0], dataset.names[p[1]].split('@')[0]) for p in
+                               topk_candidates_i]
+    topk_candidates_a_names = [dataset.names[p[0]].split('@')[0] for p in topk_candidates_a]
+
+    res_i = chatgpt_judge('candidate_ib', [query, topk_candidates_i_names])
+    res_a = chatgpt_judge('candidate_ab', [query, topk_candidates_a_names])
+
+    scores[torch.where(ins_idx)[0][scores_i_topk_idx][res_i]] += 1
+    scores[torch.where(att_idx)[0][scores_a_topk_idx][res_a]] += 1
+
+    return scores
 
 
 if __name__ == '__main__':

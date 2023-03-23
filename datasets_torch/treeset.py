@@ -2,7 +2,7 @@ import os
 import random
 from collections import deque
 from itertools import combinations, chain
-from random import shuffle
+from rich.progress import track
 
 import networkx as nx
 from copy import deepcopy
@@ -11,22 +11,23 @@ import torch
 from queue import Queue
 import numpy as np
 from tqdm import tqdm
+from transformers import RobertaModel, AutoTokenizer, CLIPTextModel
 
 from utils.utils import batch_load_img, grouper
 from torch_geometric.data import Data
 
-import multiprocessing as mp
-
 
 class TreeSet(Dataset):
     # whole, G, names, descriptions, train, eva, test,
-    def __init__(self, path, dataset_name, graph_emb=False):
+    def __init__(self, path, dataset_name, graph_emb=False, sample_size=32):
         super(TreeSet, self).__init__()
 
         self.d_name = dataset_name
+        self.sample_size = sample_size
 
         if path.endswith('pt'):
-            d = torch.load(path)
+            with open(path, 'rb') as f:
+                d = torch.load(f)
         elif path.endswith('bin'):
             import pickle
             with open(path, 'rb') as f:
@@ -43,7 +44,7 @@ class TreeSet(Dataset):
         self._undigraph = self._tree.to_undirected()
         self._c_tree = deepcopy(self._tree)
         self.names = d['names']
-        self.descriptions = d['descriptions']
+        self.descriptions = [d.split('\t')[1] for d in d['descriptions']] if d['descriptions'] is not None else []
         self.leaves = []
         self.paths = {}
         self.min_depth = 0
@@ -102,7 +103,7 @@ class TreeSet(Dataset):
         self.generate_node2descendants()
         self.generate_edges()
 
-    def generate_pyg_data(self, samples, q, sample_num=100):
+    def generate_pyg_data(self, samples, q, sample_num=20):
         p_datas, c_datas = [], []
         for s in samples:
             p, c = s
@@ -130,7 +131,7 @@ class TreeSet(Dataset):
 
     def generate_edges(self):
         candidates = set(chain.from_iterable([[(n, d) for d in ds] for n, ds in self.node2descendant.items()]))
-        print(len(candidates))
+        print('Number of candidates', len(candidates))
         self.edges = candidates  # list(self._tree.edges()) + list([[n, -1] for n in self._tree.nodes()])
 
     def generate_node2pairs(self):
@@ -177,43 +178,27 @@ class TreeSet(Dataset):
 
     def _process(self):
         if os.path.exists(self.d_name + '.feature.pt'):
-            self.embeds = torch.load(self.d_name + '.feature.pt')
+            with open(self.d_name + '.feature.pt', 'rb') as f:
+                self.embeds = torch.load(f)
             for i in self.embeds.keys():
                 self.embeds[i] = torch.nn.functional.normalize(self.embeds[i].float(), p=2, dim=-1)
         else:
-            import clip
-            m, prep = clip.load('ViT-B/32')
+            tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+            text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-base-patch32")
 
-            img_path = '/data/home10b/xw/imagenet21k/imagenet_images'
-            for n in self.whole.nodes():
-                name = self.names[n]
-                description = self.descriptions[n]
-                text = clip.tokenize(','.join([name.replace('_', ' '), description]), truncate=True)
+            for n in track(self.whole.nodes(), description='Encoding nodes'):
+                description = self.names[n].split('@')[0] + ',' + self.descriptions[n][0]
+                inputs = tokenizer(description, padding=True, return_tensors='pt', truncation=True)
 
-                if name in os.listdir(img_path):
-                    name = name
-                elif name.replace('_', ' ') in os.listdir(img_path):
-                    name = name.replace('_', ' ')
-                elif name + '#' + description in os.listdir(img_path):
-                    name = (name + '#' + description)
-
-                imgs = [os.path.join(img_path, name, i) for i in os.listdir(os.path.join(img_path, name))]
-                imgs = torch.cat(batch_load_img(imgs, prep, 100))
                 with torch.no_grad():
-                    text_embedding = m.encode_text(text.cuda()).cpu()
-                    imgs_embedding = m.encode_image(imgs.cuda()).cpu()
-                cat_ = torch.cat([text_embedding, imgs_embedding])
+                    text_embedding = text_encoder(**inputs)['pooler_output']
 
-                self.embeds[n] = cat_
+                self.embeds[n] = text_embedding
             torch.save(self.embeds, self.d_name + '.feature.pt')
 
-        if os.path.exists(self.d_name + '.pfeature.pt'):
-            self.pembeds = torch.load(self.d_name + '.pfeature.pt')
-            for i in self.pembeds.keys():
-                self.pembeds[i] = torch.nn.functional.normalize(self.pembeds[i].float(), p=2, dim=-1)
-
         if os.path.exists(self.d_name + '.pathsim.pt'):
-            self.path_sim_matrix = torch.load(self.d_name + '.pathsim.pt')
+            with open(self.d_name + '.pathsim.pt', 'rb') as f:
+                self.path_sim_matrix = torch.load(f)
         else:
             self.path_sim_matrix = torch.zeros(len(self.embeds), len(self.embeds))
             print("generating path sim mat")
@@ -237,17 +222,6 @@ class TreeSet(Dataset):
             return len(self.eva)
         else:
             return len(self.test)
-
-    def shuffle(self):
-        if self.mode == 'train':
-            if len(self.fetch_order) != 0:
-                for l in self.fetch_order:
-                    shuffle(l)
-        elif self.mode == 'eval':
-            shuffle(self.eva)
-
-        elif self.mode == 'test':
-            shuffle(self.test)
 
     def distance(self, a, b):
         return nx.shortest_path_length(self._undigraph, a, b)
@@ -274,21 +248,14 @@ class TreeSet(Dataset):
         assert mode in ('train', 'test', 'eval')
         self.mode = mode
 
-    def get_milestone(self):
-        res = [0]
-        for l in self.fetch_order:
-            res.append(res[-1] + len(l))
-        return res[1:-1]
-
-    # def generate_struct_text(self, p, q, c):
-    #     len()
-
     def sample_train_pairs(self, q, num, pos_num=1):
         pos = random.sample(self.node2pairs[q], k=pos_num) if pos_num <= len(self.node2pairs[q]) else self.node2pairs[q]
 
         # neg = [list(e) for e in self.edges if e[0] != q and e[1] != q and e not in self.node2pairs[q]]
         remain = num - len(pos)
         if remain > 0:
+            #hard negative sample
+            # rest = []
             rest = [e for e in random.sample(self.edges, remain) if
                     e[0] != q and e[1] != q and e not in self.node2pairs[q]]
             while len(rest) < remain:
@@ -311,35 +278,30 @@ class TreeSet(Dataset):
     def __getitem__(self, idx):
         if self.mode == 'eval':
             anchor = self.eva[idx]
-            return self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][0].unsqueeze(
-                0), nx.shortest_path(
-                self.whole, 0, self.eva[idx]), self.node2pairs[self.eva[idx]]
+            return self.embeds[anchor], nx.shortest_path(
+                self.whole, 0, self.eva[idx]), self.node2pairs[self.eva[idx]], list(
+                [1 if p[1] == -1 else 0 for p in self.node2pairs[self.eva[idx]]]),  self.names[self.eva[idx]]
         elif self.mode == 'test':
             anchor = self.test[idx]
-            return self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][0].unsqueeze(
-                0), nx.shortest_path(
-                self.whole, 0, self.test[idx]), self.node2pairs[self.test[idx]]
+            return self.embeds[anchor], nx.shortest_path(
+                self.whole, 0, self.test[idx]), self.node2pairs[self.test[idx]], list(
+                [1 if p[1] == -1 else 0 for p in self.node2pairs[self.test[idx]]]), self.names[self.test[idx]]
         else:
             idx += 1
             anchor = self.train[idx]
-            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, 32)
+            samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, self.sample_size)
             # assert labels[:, 0].sum() == 1
             sims = []
-            anchor_embed = self.embeds[anchor][0].unsqueeze(0) if len(self.pembeds) == 0 else self.pembeds[anchor][
-                0].unsqueeze(0)
-            i_idx = [False] * 32
+            anchor_embed = self.embeds[anchor]
+            i_idx = [False] * self.sample_size
             for i, s in enumerate(samples):
                 i_idx[i] = s[1] != -1
-                # _f = self._database[s[0].item()][0].unsqueeze(0)
-                # _s = self._database[s[1].item()][0].unsqueeze(0) if s[1] != -1 else torch.zeros_like(_f)
-                # embeds.append(torch.cat([anchor_embed, _f, _s]).unsqueeze(0))
                 sims.append(
                     torch.Tensor([self.path_sim_matrix[s[0], anchor],
                                   self.path_sim_matrix[anchor, s[1]]]).unsqueeze(0))
             p_datas, c_datas = self.generate_pyg_data(samples, anchor)
             return anchor_embed, p_datas, c_datas, labels, torch.cat(
                 sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
-            # return torch.cat(embeds), labels, torch.cat(sims), reaches, torch.Tensor(i_idx).bool(), rank_sims
 
 
 if __name__ == "__main__":

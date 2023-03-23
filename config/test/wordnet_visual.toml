@@ -1,0 +1,13 @@
+[MODEL]
+model_path = 'model128_wns_s32.pth'
+hidden_size = 512
+box_dim = 128
+graph_embed = true
+
+embed_type = 'clip'
+embedding_path = '/data/home10b/xw/visualCon/QEN-main/crawl-300d-2M-subword.bin'
+
+[DATASET]
+dataset_name = 'wordnet_visual'
+data_path = 'wn_small.pt'
+

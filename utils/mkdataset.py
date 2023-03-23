@@ -6,7 +6,8 @@ from collections import deque
 from copy import deepcopy
 from itertools import chain
 
-import clip
+import requests
+import networkx
 import openai
 import tqdm
 import requests
@@ -15,9 +16,12 @@ from nltk.corpus import wordnet as wn
 import queue
 import pprint
 import networkx as nx
-from pyvis.network import Network
 from queue import Queue
 import torch
+from rich.progress import track
+import multiprocessing as mp
+
+from utils.utils import sample_neighbors, chatgpt_judge, partition_array
 
 
 def mkdataset_tmn(path_meta, path_data, dir):
@@ -149,11 +153,14 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
 
     names = data['vocab']
     whole_g = data['g_full'].to_networkx()
-    node_features = data['g_full'].ndata['x']
+    # node_features = data['g_full'].ndata['x']
     train = data['train_node_ids']
     test = data['test_node_ids']
     val = data['validation_node_ids']
+    if 'desc' in data.keys():
+        desc = data['desc']
     roots = [node for node in whole_g.nodes() if whole_g.in_degree(node) == 0]
+    # force root id to be 0
     if len(roots) > 1:
         whole_g = nx.relabel_nodes(whole_g, {i: i + 1 for i in whole_g.nodes})
         train = (np.array(train) + 1).tolist()
@@ -163,8 +170,8 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
         root = 0
         for r in roots:
             whole_g.add_edge(root, r)
-        root_vector = torch.mean(node_features[roots], dim=0, keepdim=True)
-        node_features = torch.cat((root_vector, node_features), 0)
+        # root_vector = torch.mean(node_features[roots], dim=0, keepdim=True)
+        # node_features = torch.cat((root_vector, node_features), 0)
         names = ['root'] + names
         train = [0] + train
     else:
@@ -196,15 +203,15 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
     # for k, v in enumerate(tqdm.tqdm(names, desc='gen emb')):
     #     with torch.no_grad():
     #         features[k] = model.encode_text(clip.tokenize(v).cuda())
-    features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
+    # features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
     res = {'g': tree, 'whole': whole_g, 'train': train, 'test': test, 'eva': val,
-           'names': names, 'descriptions': None}
+           'names': names, 'descriptions': desc if 'desc' in data.keys() else None}
     if two_emb:
         plain_features = {i: f.unsqueeze(0) for i, f in enumerate(data['g_full'].ndata['y'])}
         torch.save(plain_features, d_name + '.pfeature.pt')
 
     torch.save(res, d_name + '.pt')
-    torch.save(features, d_name + '.feature.pt')
+    # torch.save(features, d_name + '.feature.pt')
 
 
 def split_tree_dataset(whole_tree_path, split=0.8):
@@ -343,30 +350,6 @@ def build_dataset(label_map, sample_image=100):
         json.dump(dataset, f)
 
 
-def mk_nonvisual():
-    data = {}
-    labels = os.listdir('../test_nonvisual')
-    for i, l in enumerate(labels):
-        des = [wn.synsets(l, pos=wn.NOUN)[0].definition()]
-        data[str(i)] = {'name': l, 'descriptions': des, 'train': [os.path.join('../test_nonvisual', l, i) for i in
-                                                                  os.listdir(os.path.join('../test_nonvisual', l))]}
-    with open('nonvisual.json', 'w') as f:
-        json.dump(data, f)
-
-
-def statis():
-    with open('res.txt', 'r') as f:
-        res = f.readlines()
-
-    mean, var = 0, 0
-    for line in res:
-        line = line.split(',')
-        mean += float(line[1].split(':')[1])
-        var += float(line[2].split(':')[1])
-    print(mean / 100)
-    print(var / 100)
-
-
 def wordnet_dataset():
     word_queue = queue.Queue()
     pos = wn.NOUN
@@ -393,43 +376,7 @@ def wordnet_dataset():
         json.dump(word_count, f)
 
 
-prompt = "A concept is considered a visual concept if it meets both the following two conditions. " \
-         "First, instances of the concept have a physical entity and can be seen in vision and share some common " \
-         "visual features." \
-         " Second, it is not a place nor a city nor a village nor a brand nor a company nor an abstract concept.\n" \
-         "Is {}, {} a visual concept? Ju111t answer ye"
-
-
-def gpt3_judge(concept, description):
-    if word_count['concept'] == 1:
-        description = None
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    response = openai.Completion.create(model="text-davinci-002", prompt=prompt.format(concept, description),
-                                        temperature=0,
-                                        max_tokens=6)
-    answer = response['choices'][0]['text'].strip()
-    return True if answer == 'Yes' else False
-
-
-def word_tree_pruner(head):
-    if len(head['children']) != 0:
-        return gpt3_judge(head['name'], head['definition'])
-    else:
-        head_is_visual = False
-        for child in head['children']:
-            is_visual = word_tree_pruner(child)
-            if not is_visual:
-                head['children'].remove(child)
-            head_is_visual = head_is_visual or is_visual
-        if not head_is_visual:
-            head_is_visual = head_is_visual or gpt3_judge(head['name'], head['definition'])
-        return head_is_visual
-
-
-def sample_subset_from_wordnet(wordnet_json_root):
-    wordnet = json.load(open(wordnet_json_root))
-
-
+# return a dict containing the name - name+desc dict
 def construct_tree_to_dict(tree, unique=False):
     d = {}
 
@@ -454,6 +401,143 @@ def construct_tree_to_dict(tree, unique=False):
 
     dfs(tree, unique)
     return d
+
+
+
+def _p(taxo, nodes, i):
+    local_list = []
+    for _n in track(nodes, description='Gen paths'):
+        local_list.extend(list(networkx.all_simple_paths(taxo, 'n00001740', _n)))
+    print('Checkpoint of paths.')
+    json.dump(local_list, open(os.path.join('../data/', 'paths{}.json'.format(i)), 'w'))
+
+
+def _f(taxo, bamboo, path, i):
+    clean_d = {}
+    for p in track(path):
+        neighbors = sample_neighbors(taxo, p[-2], p[-1])
+        p_name = [bamboo['id2name'][pp][0] for pp in p]
+        neighbors = [bamboo['id2name'][pp][0] for pp in neighbors]
+        clean_d[str(p)] = chatgpt_judge('path', p_name, neighbors)
+        time.sleep(0.3)
+    print('saving {}'.format(i))
+    json.dump(clean_d, open(os.path.join('../data/clean2/', 'clean2_{}.json'.format(i)), 'w'))
+
+
+def build_bamboo_taxo(bamboo_path='data/bamboo_V4.json', save_path='../data/'):
+    bamboo = json.load(open(bamboo_path, 'r'))
+    id2name = {}
+
+    if os.path.exists(os.path.join(save_path, 'id2name.json')):
+        id2name = json.load(open(os.path.join(save_path, 'id2name.json'), 'r'))
+    else:
+        # filter non-English class and classes without desc
+        from langdetect import detect
+        for i, n in track(bamboo['id2name'].items(),
+                          description='Filtering non english class and those without desc. '):
+            res = i in bamboo['id2desc'].keys() and bamboo['id2desc'][i] != ''
+            for nn in n:
+                res = res and detect(nn + ',' + bamboo['id2desc'][i]) == 'en'
+            if res:
+                id2name[i] = n
+
+        ## mid save
+        print('Checkpoint of id2name.')
+        json.dump(id2name, open(os.path.join(save_path, 'id2name.json'), 'w'))
+
+    # build bamboo taxonomy
+    taxonomy = networkx.DiGraph()
+    for i in track(bamboo['father2child'].keys(), description='Building taxonomy'):
+        for child in bamboo['father2child'][i]:
+            taxonomy.add_edge(i, child)
+
+    # clean taxonomy
+    core_taxonomy = _get_holdout_subgraph(taxonomy, id2name.keys())
+    core_taxonomy = remove_root_nodes(core_taxonomy, 'n00001740')
+
+    # mismount concept filter
+    paths, processes = [], []
+    if os.path.exists(os.path.join(save_path, 'paths.json')):
+        paths = json.load(open(os.path.join(save_path, 'paths.json'), 'r'))
+    else:
+        all_nodes = list(core_taxonomy.nodes)
+        all_nodes_p = partition_array(all_nodes, 30)
+
+        for i, nodes in enumerate(all_nodes_p):
+            processes.append(mp.Process(target=_p, args=(core_taxonomy, nodes, i)))
+        for p in processes:
+            p.start()
+        for p in processes:
+            p.join()
+
+        # for n in track(core_taxonomy.nodes, description='Filter mismount concept'):
+        #     paths.extend(list(networkx.all_simple_paths(core_taxonomy, 'n00001740', n)))
+
+        # mid save
+        # print('Checkpoint of paths.')
+        # json.dump(paths, open(os.path.join(save_path, 'paths.json'), 'w'))
+    if os.path.exists(os.path.join(save_path, 'clean2.json')):
+        clean2 = json.load(open(os.path.join(save_path, 'clean2.json'), 'r'))
+    else:
+        paths = partition_array(paths, 40)
+        threads = []
+        for i, pa in enumerate(paths):
+            threads.append(mp.Process(target=_f, args=(core_taxonomy, bamboo, pa, i)))
+
+        for t in threads:
+            t.start()
+
+        for t in threads:
+            t.join()
+
+    name2id = {}
+    for k, v in bamboo['id2name'].items():
+        name2id[v[0]] = k
+
+    for k, v in clean2.items():
+        k = eval(k)
+        p = name2id[k[0]]
+        c = name2id[k[1]]
+        if not v and core_taxonomy.has_edge(p, c):
+            core_taxonomy.remove_edge(p, c)
+
+    scc = list(networkx.weakly_connected_components(core_taxonomy))
+    largest_scc = max(scc, key=len)
+    core_taxonomy = core_taxonomy.subgraph(largest_scc).copy()
+    core_taxonomy = remove_root_nodes(core_taxonomy, 'n00001740')
+
+    with open(os.path.join(save_path, 'bamboo.taxo'), 'w') as f:
+        for e in core_taxonomy.edges:
+            f.write('{}\t{}\n'.format(e[0], e[1]))
+
+    with open(os.path.join(save_path, 'bamboo.terms'), 'w') as f, open(os.path.join(save_path, 'bamboo.desc'),
+                                                                       'w') as f2:
+        for n in core_taxonomy.nodes:
+            f.write('{}\t{}\n'.format(n, bamboo['id2name'][n][0]))
+            f2.write('{}\t{}\n'.format(n, bamboo['id2desc'][n]))
+
+    # visual concept filter
+    # visual_concepts = [n for n in core_taxonomy.nodes if
+    #                    chatgpt_judge('visual', [bamboo['id2name'][n], bamboo['id2desc'][n]])]
+    # core_taxonomy = _get_holdout_subgraph(core_taxonomy, list(visual_concepts))
+    # root = [n for n in core_taxonomy.nodes if core_taxonomy.in_degree(n) == 0]
+    # assert len(root) == 1
+
+
+def remove_root_nodes(G, root_node):
+    # G is a networkx DiGraph object
+    # root_node is the node to keep as the root
+    # returns a new DiGraph object with only one root node
+    # assumes that G has at least one root node
+    root_nodes = [n for n in G.nodes if G.in_degree(n) == 0]
+    nodes_to_remove = []
+    for r in root_nodes:
+        if r != root_node:
+            descendants = list(nx.descendants(G, r))
+            nodes_to_remove.append(r)
+            nodes_to_remove.extend(descendants)
+    G.remove_nodes_from(nodes_to_remove)
+    return G
 
 
 def interactive_json_maker():
@@ -573,8 +657,9 @@ if __name__ == '__main__':
     # t = TreeSet(G, names, descriptions)
     # mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
     #               '/data/home10b/xw/visualCon/TMN-main/data/mywn')
-    mk_dataset_from_pickle('/data/home10b/xw/visualCon/TMN-main/data/mesh/mesh.pickle.bin',
-                           '../mesh', False)
-    # mkdataset_tmn('/data/home10b/xw/visualCon/wn_food.pt', '/data/home10b/xw/visualCon/wn_food.feature.pt',
-    #               '/data/home10b/xw/visualCon/TMN-main/data/SemEval-Food/semeval_food.pickle.bin')
+    mk_dataset_from_pickle('/data/home10b/xw/visualCon/data/bamboo/bamboo.pickle.bin',
+                           '../bamboo', False)
+    # mkdataset_tmn('/data/home10b/xw/visualCon/wn_verb.pt', '/data/home10b/xw/visualCon/wn_verb.feature.pt',
+    #               '/data/home10b/xw/visualCon/TMN-main/data/SemEval-V/semeval_food.pickle.bin')
     # fast_embed('/data/home10b/xw/visualCon/TMN-main/data/mesh/mesh.terms')
+    # build_bamboo_taxo('/data/home10b/xw/visualCon/data/bamboo_V4.json')

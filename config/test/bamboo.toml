@@ -1,0 +1,12 @@
+[MODEL]
+model_path = 'modelp128_bamboo_s32.pth'
+hidden_size = 512
+box_dim = 128
+graph_embed = true
+
+embed_type = 'clip_t'
+
+[DATASET]
+dataset_name = 'bamboo'
+data_path = 'bamboo.pt'
+

@@ -1,7 +1,7 @@
 import os
 import random
 from collections import deque
-from itertools import combinations, chain
+from itertools import combinations, chain, product
 from rich.progress import track
 
 import networkx as nx
@@ -19,7 +19,7 @@ from torch_geometric.data import Data
 
 class TreeSet(Dataset):
     # whole, G, names, descriptions, train, eva, test,
-    def __init__(self, path, dataset_name, graph_emb=False, sample_size=32):
+    def __init__(self, path, dataset_name, sample_size=32):
         super(TreeSet, self).__init__()
 
         self.d_name = dataset_name
@@ -33,37 +33,40 @@ class TreeSet(Dataset):
             with open(path, 'rb') as f:
                 d = pickle.load(f)
 
-        self.graph_emb = graph_emb
         self.edges = None
         self.mode = 'train'
         self.whole = d['whole']
         self.train = d['train']
+        self.train.sort()
         self.eva = d['eva']
         self.test = d['test']
         self._tree = d['g']
         self._undigraph = self._tree.to_undirected()
         self._c_tree = deepcopy(self._tree)
         self.names = d['names']
-        self.descriptions = [d.split('\t')[1] for d in d['descriptions']] if d['descriptions'] is not None else []
-        self.leaves = []
-        self.paths = {}
-        self.min_depth = 0
-        self.max_depth = 0
-        self.mean_depth = 0
-        self.mean_order = 0
+        self.root = [n for n in self._tree if self._tree.in_degree(n) == 0][0]
+        self.descriptions = d[
+            'descriptions']  # [d.split('\t')[1] for d in d['descriptions']] if d['descriptions'] is not None else []
         self.embeds = {}
-        self.pembeds = {}
         self.fused_embeddings = {}
         self.path_sim_matrix = None
         self.node2pairs = {}
         self.node2ancestor = {}
         self.node2descendant = {}
-        self.pyg_data = {}
 
         self._init()
         self._process()
-        # self.generate_pyg_data()
-        # self.shuffle()
+
+    def shuffle(self):
+        if self.mode == 'train':
+            if len(self.fetch_order) != 0:
+                for l in self.fetch_order:
+                    random.shuffle(l)
+        elif self.mode == 'eval':
+            random.shuffle(self.eva)
+
+        elif self.mode == 'test':
+            random.shuffle(self.test)
 
     def update_box(self, i, embed):
         self.fused_embeddings[i] = embed
@@ -75,35 +78,38 @@ class TreeSet(Dataset):
     def clear_boxes(self):
         self.fused_embeddings = {}
 
-    def _get_leaves(self, t=None):
-        if t is None:
-            self.leaves = list([node for node in self._tree.nodes.keys() if self._tree.out_degree(node) == 0])
-        else:
-            return list([node for node in t.nodes.keys() if t.out_degree(node) == 0])
-
-    def _get_all_paths(self):
-        for l in self._tree.nodes():
-            self.paths[l] = nx.shortest_path(self._tree, 0, l)
-
     def _stats(self):
-        depths = list(map(lambda x: len(x[1]), self.paths.items()))
-        orders = np.array(list(map(lambda x: len(list(self._tree.successors(x))), self._tree.nodes.keys())))
-        self.min_depth = min(depths)
-        self.max_depth = max(depths)
-        self.mean_depth = sum(depths) / len(depths)
-        self.mean_order = orders.sum() / (orders != 0).sum()
+        parents_train = []
+        parents_test = []
+        labels_test = []
+        labels_train = []
+        for n in self._tree.nodes():
+            if n == 0:
+                continue
+            parents_train.append(len(list(self._tree.predecessors(n))))
+            labels_train.append(len(self.node2pairs[n]))
+        for n in self.test:
+            parents_test.append(len(list(self.whole.predecessors(n))))
+            labels_test.append(len(self.node2pairs[n]))
+
+        print('avg parents in seed tax:', sum(parents_train) / len(parents_train))
+        print('max parents in seed tax:', max(parents_test))
+        print('avg parents in test:', sum(parents_test) / len(parents_test))
+        print('max parents in test:', max(parents_test))
+        print('avg gt pos train:', sum(labels_train) / len(labels_train))
+        print('max gt pos train:', max(labels_train))
+        print('avg gt pos test:', sum(labels_test) / len(labels_test))
+        print('max gt pos test:', max(labels_test))
 
     def _init(self):
-        self._get_leaves()
-        self._get_all_paths()
-        # self._stats()
-        # self._form_mini_batches()
+
         self.generate_node2pairs()
+        # self._stats()
         self.generate_node2ancestors()
         self.generate_node2descendants()
         self.generate_edges()
 
-    def generate_pyg_data(self, samples, q, sample_num=20):
+    def generate_pyg_data(self, samples, q, sample_num=30):
         p_datas, c_datas = [], []
         for s in samples:
             p, c = s
@@ -118,13 +124,15 @@ class TreeSet(Dataset):
             if 0 < sample_num < len(cc):
                 cc = random.sample(cc, sample_num)
             p_features = [self.embeds[n][0].unsqueeze(0) for n in [p] + pc]
-            p_edge = [[1 + i, 0] for i in range(len(pc))] + [[0, 0]]
-            p_data = Data(x=torch.cat(p_features), edge_index=torch.Tensor(p_edge).t().contiguous().int())
+            p_edge_index = torch.Tensor([[1 + i, 0] for i in range(len(pc))] + [[0, 0]]).t().contiguous().long()
+            p_edge_index = torch.cat([p_edge_index, p_edge_index.flip(0)], dim=1)
+            p_data = Data(x=torch.cat(p_features), edge_index=p_edge_index)
 
             c_features = [self.embeds[n][0].unsqueeze(0) if n != -1 else torch.zeros_like(self.embeds[0]) for n in
                           [c] + cc]
-            c_edge = [[1 + i, 0] for i in range(len(cc))] + [[0, 0]]
-            c_data = Data(x=torch.cat(c_features), edge_index=torch.Tensor(c_edge).t().contiguous().int())
+            c_edge_index = torch.Tensor([[1 + i, 0] for i in range(len(cc))] + [[0, 0]]).t().contiguous().long()
+            c_edge_index = torch.cat([c_edge_index, c_edge_index.flip(0)], dim=1)
+            c_data = Data(x=torch.cat(c_features), edge_index=c_edge_index)
 
             p_datas.append(p_data), c_datas.append(c_data)
         return p_datas, c_datas
@@ -158,16 +166,9 @@ class TreeSet(Dataset):
             position = [(p, c) for p in parents for c in children if p != c]
             self.node2pairs[node] = position
 
-        # for n in self._tree.nodes():
-        #     if n == 0:
-        #         continue
-        #     _f = list(self._tree.predecessors(n))[0]
-        #     _s = list(self._tree.successors(n)) + [-1]
-        #     self.node2pairs[n] = list([[_f, s] for s in _s])
-
     def generate_node2ancestors(self):
         for n in self._tree.nodes():
-            self.node2ancestor[n] = self.paths[n][:-1]
+            self.node2ancestor[n] = list([node for node in nx.ancestors(self.whole, n) if node in self.train])
 
     def generate_node2descendants(self):
         for n in self._tree.nodes():
@@ -187,7 +188,7 @@ class TreeSet(Dataset):
             text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-base-patch32")
 
             for n in track(self.whole.nodes(), description='Encoding nodes'):
-                description = self.names[n].split('@')[0] + ',' + self.descriptions[n][0]
+                description = self.names[n].split('@')[0]  # + ',' + self.descriptions[n][0]
                 inputs = tokenizer(description, padding=True, return_tensors='pt', truncation=True)
 
                 with torch.no_grad():
@@ -200,7 +201,7 @@ class TreeSet(Dataset):
             with open(self.d_name + '.pathsim.pt', 'rb') as f:
                 self.path_sim_matrix = torch.load(f)
         else:
-            self.path_sim_matrix = torch.zeros(len(self.embeds), len(self.embeds))
+            self.path_sim_matrix = torch.zeros(len(self.names), len(self.names))
             print("generating path sim mat")
 
             def cal_sim(comb):
@@ -209,7 +210,7 @@ class TreeSet(Dataset):
                 self.path_sim_matrix[r, c] = self.path_sim(r, c)
                 self.path_sim_matrix[c, r] = self.path_sim_matrix[r, c]
 
-            for comb in tqdm(combinations(list(self._tree.nodes()), r=2)):
+            for comb in track(combinations(list(self._tree.nodes()), r=2)):
                 cal_sim(comb)
 
             # list(map(cal_sim, combinations(self._tree.nodes(), r=2)))
@@ -248,31 +249,62 @@ class TreeSet(Dataset):
         assert mode in ('train', 'test', 'eval')
         self.mode = mode
 
+    def hard_negative_sample(self, q, num):
+        # ans = list(combinations(self.node2ancestor[q], r=2))
+        des = deepcopy(self.node2descendant[q])
+        des.remove(-1) if -1 in des else None
+        ans = self.node2ancestor[q]
+
+        # if len(des) == 0:
+        #     return []
+        # if len(des) == 1:
+        #     tmp = [(_, des[0]) for _ in ans]
+        #     num = min(num, len(tmp))
+        #     res = random.sample(tmp, num)
+        #     list([res.remove(i) for i in self.node2pairs[q] if i in res])
+        #     return res
+        if len(des) <= 1:
+            return []
+        res = []
+        if len(des) * (len(des) - 1) < num // 3 * 2:
+            res += list(combinations(des, r=2))
+        else:
+            while len(res) < num // 3 * 2:
+                sampled = (random.choice(des), random.choice(des))
+                res.append(sampled) if sampled not in res else None
+        if len(des) * len(ans) < num // 3:
+            res += list([(i, j) for i in ans for j in des])
+        else:
+            while len(res) < num:
+                a = (random.choice(ans), random.choice(des))
+                res.append(a)
+        res = list(set(res).difference(set(self.node2pairs[q])))
+        return res
+
     def sample_train_pairs(self, q, num, pos_num=1):
         pos = random.sample(self.node2pairs[q], k=pos_num) if pos_num <= len(self.node2pairs[q]) else self.node2pairs[q]
-
         # neg = [list(e) for e in self.edges if e[0] != q and e[1] != q and e not in self.node2pairs[q]]
         remain = num - len(pos)
         if remain > 0:
-            #hard negative sample
-            # rest = []
-            rest = [e for e in random.sample(self.edges, remain) if
-                    e[0] != q and e[1] != q and e not in self.node2pairs[q]]
+            # hard negative sample
+            rest = []  # self.hard_negative_sample(q, remain // 3)
+
             while len(rest) < remain:
                 rest += [e for e in random.sample(self.edges, remain - len(rest)) if
                          e[0] != q and e[1] != q and e not in self.node2pairs[q] and e not in rest]
         else:
             rest = random.sample(pos, num)
+        assert len(rest) == remain
         sims = self.path_sim_matrix[pos[0][0], [r[0] for r in rest]]
         labels = []
         reaches = []  # q in p, p in q, c in q, q in c
         rest.insert(random.randint(0, len(rest) - 1), pos[0])
         for r in rest:
-            l = [r in self.node2pairs[q], r[0] == pos[0][0], r[1] == pos[0][1]]
             rea = [r[0] in self.node2ancestor[q], r[0] in self.node2descendant[q],
                    r[1] in self.node2descendant[q], r[1] in self.node2ancestor[q]]
-            labels.append(l)
+            labels.append(r in self.node2pairs[q])
             reaches.append(rea)
+        assert sum(labels) == 1
         return rest, torch.Tensor(labels).int(), torch.Tensor(reaches).int(), torch.Tensor(sims)
 
     def __getitem__(self, idx):
@@ -280,7 +312,7 @@ class TreeSet(Dataset):
             anchor = self.eva[idx]
             return self.embeds[anchor], nx.shortest_path(
                 self.whole, 0, self.eva[idx]), self.node2pairs[self.eva[idx]], list(
-                [1 if p[1] == -1 else 0 for p in self.node2pairs[self.eva[idx]]]),  self.names[self.eva[idx]]
+                [1 if p[1] == -1 else 0 for p in self.node2pairs[self.eva[idx]]]), self.names[self.eva[idx]]
         elif self.mode == 'test':
             anchor = self.test[idx]
             return self.embeds[anchor], nx.shortest_path(
@@ -290,7 +322,7 @@ class TreeSet(Dataset):
             idx += 1
             anchor = self.train[idx]
             samples, labels, reaches, rank_sims = self.sample_train_pairs(anchor, self.sample_size)
-            # assert labels[:, 0].sum() == 1
+            assert labels.sum() == 1
             sims = []
             anchor_embed = self.embeds[anchor]
             i_idx = [False] * self.sample_size

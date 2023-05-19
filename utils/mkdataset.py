@@ -21,7 +21,7 @@ import torch
 from rich.progress import track
 import multiprocessing as mp
 
-from utils.utils import sample_neighbors, chatgpt_judge, partition_array
+from utils import sample_neighbors, chatgpt_judge, partition_array
 
 
 def mkdataset_tmn(path_meta, path_data, dir):
@@ -98,8 +98,9 @@ def extract_tree_from_imagenet(word_path, imagenet_path, save=True):
     return tree
 
 
-def _get_holdout_subgraph(g, node_ids):
-    node_to_remove = [n for n in g.nodes if n not in node_ids]
+def _get_holdout_subgraph(g, node_ids, node_to_remove=None):
+    if node_to_remove is None:
+        node_to_remove = [n for n in g.nodes if n not in node_ids]
     subgraph = g.subgraph(node_ids).copy()
     for node in node_to_remove:
         parents = set()
@@ -153,7 +154,7 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
 
     names = data['vocab']
     whole_g = data['g_full'].to_networkx()
-    # node_features = data['g_full'].ndata['x']
+    node_features = data['g_full'].ndata['x']
     train = data['train_node_ids']
     test = data['test_node_ids']
     val = data['validation_node_ids']
@@ -162,6 +163,7 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
     roots = [node for node in whole_g.nodes() if whole_g.in_degree(node) == 0]
     # force root id to be 0
     if len(roots) > 1:
+        root_vector = torch.mean(node_features[roots], dim=0, keepdim=True)
         whole_g = nx.relabel_nodes(whole_g, {i: i + 1 for i in whole_g.nodes})
         train = (np.array(train) + 1).tolist()
         test = (np.array(test) + 1).tolist()
@@ -170,8 +172,7 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
         root = 0
         for r in roots:
             whole_g.add_edge(root, r)
-        # root_vector = torch.mean(node_features[roots], dim=0, keepdim=True)
-        # node_features = torch.cat((root_vector, node_features), 0)
+        node_features = torch.cat((root_vector, node_features), 0)
         names = ['root'] + names
         train = [0] + train
     else:
@@ -203,7 +204,7 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
     # for k, v in enumerate(tqdm.tqdm(names, desc='gen emb')):
     #     with torch.no_grad():
     #         features[k] = model.encode_text(clip.tokenize(v).cuda())
-    # features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
+    features = {i: f.unsqueeze(0) for i, f in enumerate(node_features)}
     res = {'g': tree, 'whole': whole_g, 'train': train, 'test': test, 'eva': val,
            'names': names, 'descriptions': desc if 'desc' in data.keys() else None}
     if two_emb:
@@ -211,7 +212,7 @@ def mk_dataset_from_pickle(load_path, d_name, two_emb=False):
         torch.save(plain_features, d_name + '.pfeature.pt')
 
     torch.save(res, d_name + '.pt')
-    # torch.save(features, d_name + '.feature.pt')
+    torch.save(features, d_name + '.feature.pt')
 
 
 def split_tree_dataset(whole_tree_path, split=0.8):
@@ -401,7 +402,6 @@ def construct_tree_to_dict(tree, unique=False):
 
     dfs(tree, unique)
     return d
-
 
 
 def _p(taxo, nodes, i):
@@ -632,6 +632,103 @@ def fast_embed(data_path):
             f.writelines(res)
 
 
+def extract_conceptnet(path):
+    with open(path + '/train100k.txt', 'r') as f:
+        train = f.readlines()
+    with open(path + '/test.txt', 'r') as f:
+        test = f.readlines()
+    with open(path + '/dev1.txt', 'r') as f:
+        eva = f.readlines()
+    isa = list(filter(lambda x: x.split('\t')[0].lower() == 'isa', train))
+    test = list(filter(lambda x: x.split('\t')[0].lower() == 'isa', test))
+    eva = list(filter(lambda x: x.split('\t')[0].lower() == 'isa', eva))
+    g = nx.DiGraph()
+    id2name = {}
+    name2id = {}
+    i = 1
+    for relation in isa + test + eva:
+        child, parent = relation.split('\t')[1], relation.split('\t')[2]
+        if child not in name2id.keys():
+            name2id[child] = i
+            id2name[i] = child
+            i += 1
+        if parent not in name2id.keys():
+            name2id[parent] = i
+            id2name[i] = parent
+            i += 1
+
+        g.add_edge(name2id[parent], name2id[child])
+
+    self_loops = nx.nodes_with_selfloops(g)
+    for n in self_loops:
+        g.remove_edge(n, n)
+
+    cycle = nx.find_cycle(g)
+    while len(cycle) > 0:
+        d, s = cycle[0][0], cycle[-1][0]
+        g.remove_edge(s, d)
+        try:
+            cycle = nx.find_cycle(g)
+        except:
+            break
+
+    roots = [n for n in g.nodes() if g.in_degree(n) == 0]
+    name2id['#root'] = 0
+    id2name[0] = '#root'
+    for r in roots:
+        g.add_edge(0, r)
+    leaves = [n for n in g.nodes() if g.out_degree(n) == 0]
+    paths = list(filter(lambda x: len(x) > 2, [nx.shortest_path(g, 0, l) for l in leaves]))
+    candidates = list(set(chain.from_iterable(list(map(lambda x: x[2:], paths)))))
+    sample_size = min(120, int(0.01 * len(candidates)))
+    random.seed(47)
+    random.shuffle(candidates)
+    test = candidates[:sample_size]
+    eva = candidates[sample_size:2 * sample_size]
+    train = list([n for n in g.nodes() if n not in test + eva])
+    taxo = _get_holdout_subgraph(g, train)
+    torch.save(
+        {'train': train, 'test': test, 'eva': eva, 'g': taxo, 'whole': g, 'names': id2name, 'descriptions': None},
+        'conceptnet.pt')
+
+
+def mk_wn(path):
+    random.seed(47)
+    with open(path + 'wn.terms') as f:
+        terms = f.readlines()
+        terms = {int(term.split('\t')[1]): term.split('\t')[0] for term in terms}
+        terms = [terms[i] for i in range(0, len(terms))]
+    with open(path + 'wn.desc') as f:
+        descs = f.readlines()
+        descs = {int(desc.split('\t')[0]): desc.split('\t')[1] for desc in descs}
+        descs = [descs[i] for i in range(0, len(descs))]
+    with open(path + 'wn.taxo') as f:
+        relations = f.readlines()
+
+    g = nx.DiGraph()
+    for r in relations:
+        child, parent = r.split('\t')[0], r.split('\t')[1]
+        g.add_edge(int(parent), int(child))
+
+    terms = ['##wordnet_root##'] + terms
+    descs = ['##wordnet_root##'] + descs
+    g = nx.relabel_nodes(g, {i: i + 1 for i in g.nodes})
+    roots = [n for n in g.nodes() if g.in_degree(n) == 0]
+
+    for r in roots:
+        g.add_edge(0, r)
+    sampled = list(g.nodes())
+    sampled.remove(0)
+    random.shuffle(sampled)
+    sz = min(1000, int(0.01 * len(terms)))
+    eva = sampled[:sz]
+    test = sampled[sz:2 * sz]
+    train = [0] + sampled[2 * sz:]
+    core_taxo = _get_holdout_subgraph(g, train, eva + test)
+    torch.save(
+        {'train': train, 'test': test, 'eva': eva, 'names': terms, 'descriptions': descs, 'g': core_taxo, 'whole': g},
+        'wordnet.pt')
+
 word_count = None
 if __name__ == '__main__':
     # word_count = json.load(open('wordnet_count.json'))
@@ -657,9 +754,10 @@ if __name__ == '__main__':
     # t = TreeSet(G, names, descriptions)
     # mkdataset_tmn('/data/home10b/xw/visualCon/imagenet_dataset.pt', '/data/home10b/xw/visualCon/tree_data.pt',
     #               '/data/home10b/xw/visualCon/TMN-main/data/mywn')
-    mk_dataset_from_pickle('/data/home10b/xw/visualCon/data/bamboo/bamboo.pickle.bin',
-                           '../bamboo', False)
+    # mk_dataset_from_pickle('/data/home10b/xw/visualCon/TMN-main/data/MAG-PSY/psychology.pickle.bin',
+    #                        '../mag_psy', False)
     # mkdataset_tmn('/data/home10b/xw/visualCon/wn_verb.pt', '/data/home10b/xw/visualCon/wn_verb.feature.pt',
     #               '/data/home10b/xw/visualCon/TMN-main/data/SemEval-V/semeval_food.pickle.bin')
     # fast_embed('/data/home10b/xw/visualCon/TMN-main/data/mesh/mesh.terms')
     # build_bamboo_taxo('/data/home10b/xw/visualCon/data/bamboo_V4.json')
+    mk_wn('/data/home10b/xw/visualCon/data/wn_full/')

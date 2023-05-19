@@ -1,12 +1,8 @@
-cls
-dataset_json/imagnet_dataset.json
+datasets_json
 .idea
 .vscode
 .DS_Store
-test_nonvisual
-res.txt
 TMN-main
-TaxoEnrich-main
 QEN-main
 SemEval-Noun
 SemEval-Noun.zip
@@ -16,3 +12,4 @@ SemEval-Verb.zip
 data
 figs
 config/base_config.toml
+peft_llama

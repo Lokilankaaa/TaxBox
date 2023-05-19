@@ -5,8 +5,8 @@ import networkx
 import requests
 from PIL import Image
 from matplotlib import pyplot as plt
-from scipy.stats import gaussian_kde, norm, kurtosis
-from scipy.cluster import vq, hierarchy
+# from scipy.stats import gaussian_kde, norm, kurtosis
+# from scipy.cluster import vq, hierarchy
 import torch
 import os
 import numpy as np
@@ -20,7 +20,7 @@ from typing import Union
 import re
 import itertools
 
-EPS = 1e-13
+EPS = 1e-20
 
 
 def adjust_moco_momentum(epoch, m, total_epochs):
@@ -265,7 +265,7 @@ def softplus(x, t):
     return F.softplus(x, t)
 
 
-def soft_volume(x: torch.Tensor, t=8, box_mode=False):
+def soft_volume(x: torch.Tensor, t=10, box_mode=False):
     if x.dim() == 1:
         x = x.unsqueeze(0)
     # assert x.dim() == 2
@@ -274,7 +274,7 @@ def soft_volume(x: torch.Tensor, t=8, box_mode=False):
         box_length = Z - z
     else:
         box_length = Z * 2
-    return softplus(box_length, t)
+    return softplus(box_length, t).clamp(EPS)
 
 
 def bessel_approx_volume(x, t=1, box_mode=False):
@@ -401,7 +401,10 @@ def obtain_ranks(outputs, targets):
 
 
 def rearrange(energy_scores, candidate_position_idx, true_position_idx):
-    tmp = np.array([[tuple(x) == tuple(y) for x in candidate_position_idx] for y in true_position_idx]).any(0)
+    if isinstance(true_position_idx[0], tuple):
+        tmp = np.array([[tuple(x) == tuple(y) for x in candidate_position_idx] for y in true_position_idx]).any(0)
+    else:
+        tmp = np.array([[x == y for x in candidate_position_idx] for y in true_position_idx]).any(0)
     correct = np.where(tmp)[0]
     incorrect = np.where(~tmp)[0]
     labels = torch.cat((torch.ones(len(correct)), torch.zeros(len(incorrect)))).int()
@@ -483,34 +486,34 @@ def extract_features_for_imgs(_model, preprocess, path_to_imglist, l=None):
         return f
 
 
-def visualize_distribution(path_to_npy):
-    features = np.load(path_to_npy).T
-    print(features.shape)
-    show_dims = random.sample(list(range(0, features.shape[0])), 8)
-    for dim in show_dims:
-        feature = features[dim, :]
-        norm_feature = (feature - feature.min()) / (feature.max() - feature.min())
-        density = gaussian_kde(norm_feature)
-        x = np.linspace(0, 1, 10000)
-        y = density(x)
-        plt.plot(x, y, label='feature_distribution')
-        plt.plot(x, norm.pdf(x, norm_feature.mean(), norm_feature.std()), label='normal_distribution')
-        plt.title('mean:' + str(norm_feature.mean()) + '-' + 'var:' + str(norm_feature.var()))
-        plt.legend(loc='upper right')
-        plt.show()
+# def visualize_distribution(path_to_npy):
+#     features = np.load(path_to_npy).T
+#     print(features.shape)
+#     show_dims = random.sample(list(range(0, features.shape[0])), 8)
+#     for dim in show_dims:
+#         feature = features[dim, :]
+#         norm_feature = (feature - feature.min()) / (feature.max() - feature.min())
+#         density = gaussian_kde(norm_feature)
+#         x = np.linspace(0, 1, 10000)
+#         y = density(x)
+#         plt.plot(x, y, label='feature_distribution')
+#         plt.plot(x, norm.pdf(x, norm_feature.mean(), norm_feature.std()), label='normal_distribution')
+#         plt.title('mean:' + str(norm_feature.mean()) + '-' + 'var:' + str(norm_feature.var()))
+#         plt.legend(loc='upper right')
+#         plt.show()
 
 
-def cluster_feature_dim(path_to_npy):
-    features = np.load(path_to_npy).T
-
-    def cluster_one_dim_with_kurtosis(feature):
-        norm_feature = (feature - feature.min()) / (feature.max() - feature.min())
-        k = kurtosis(norm_feature)
-        return k
-
-    kurtosis_each_dim = np.array(list(map(cluster_one_dim_with_kurtosis, features)))
-    vq.kmeans(kurtosis_each_dim, 2)
-
+# def cluster_feature_dim(path_to_npy):
+#     features = np.load(path_to_npy).T
+#
+#     def cluster_one_dim_with_kurtosis(feature):
+#         norm_feature = (feature - feature.min()) / (feature.max() - feature.min())
+#         k = kurtosis(norm_feature)
+#         return k
+#
+#     kurtosis_each_dim = np.array(list(map(cluster_one_dim_with_kurtosis, features)))
+#     vq.kmeans(kurtosis_each_dim, 2)
+#
 
 def retrieve_model(model_name, device):
     model_dict = {'resnet50': 'nvidia_resnet50', 'clip': 'ViT-B/32'}
@@ -619,6 +622,21 @@ prompt = {
 }
 
 
+def rescore_by_att(scores: torch.Tensor, att_idx: torch.Tensor, ins_idx: torch.Tensor,
+                   edges: torch.Tensor, k: int = 5) -> torch.Tensor:
+    scores_i = scores[ins_idx]
+    scores_a = scores[att_idx]
+    edges_i = edges[ins_idx, :]
+    edges_a = edges[att_idx, :]
+    scores_a_topk_idx = scores_a.topk(1)[1]
+
+    # get the topk descendants
+    topk_candidates_a = edges_a[scores_a_topk_idx, :][0][0]
+    scores_i[edges_i[:, 0] == topk_candidates_a] /= scores_a[scores_a_topk_idx]
+    scores[ins_idx] = scores_i
+    return scores
+
+
 def chatgpt_judge(prompt_type: str, query: [str], neighbors: [str] = None) -> Union[bool, List[bool]]:
     """
     function to judge whether a concept is visual and whether it is placed correctly.
@@ -718,4 +736,4 @@ if __name__ == '__main__':
     # device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     # model, preprocess = retrieve_model('resnet50', device)
     # extract_features_for_imgs(model, preprocess, 'handcrafted')
-    visualize_distribution('features/apple.npy')
+    pass

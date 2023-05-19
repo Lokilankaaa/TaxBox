@@ -1,12 +1,12 @@
 [model]
 hidden_size = 300
-box_dim = 128
+box_dim = 64
 bce_loss_weight = 30
 ranking_loss_weight = 1
 box_constraint_loss_weight = 1
 
 [dataset]
-dataset_pt = wn_verb.pt
+dataset_pt = wn_food.pt
 batch_size = 16
 pos_sample_size = 1
 neg_sample_size = 63

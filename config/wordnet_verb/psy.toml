@@ -1,12 +1,12 @@
 [model]
-hidden_size = 300
-box_dim = 128
+hidden_size = 250
+box_dim = 160
 bce_loss_weight = 30
 ranking_loss_weight = 1
 box_constraint_loss_weight = 1
 
 [dataset]
-dataset_pt = wn_verb.pt
+dataset_pt = mag_psy.pt
 batch_size = 16
 pos_sample_size = 1
 neg_sample_size = 63

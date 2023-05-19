@@ -1,0 +1,20 @@
+[model]
+hidden_size = 250
+box_dim = 128
+bce_loss_weight = 30
+ranking_loss_weight = 1
+box_constraint_loss_weight = 1
+
+[dataset]
+dataset_pt = mag_cs.pt
+batch_size = 16
+pos_sample_size = 1
+neg_sample_size = 63
+
+[training]
+lr = 1e-3
+epoch = 100
+gpu_ids = -1
+train = True
+test = False
+resume = False
